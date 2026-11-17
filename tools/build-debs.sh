@@ -243,7 +243,8 @@ main() {
 	# Host tools.
 	if [[ -n "$opt_build_deps" ]]; then
 		nimbus_require_root
-		nimbus_apt_install_missing dpkg-dev debhelper devscripts gpg gpgv git
+		# gpg-agent is needed to generate the --allow-test-key key.
+		nimbus_apt_install_missing dpkg-dev debhelper devscripts gpg gpg-agent gpgv git
 		if [[ -n "$opt_lintian" ]]; then
 			nimbus_apt_install_missing lintian
 		fi

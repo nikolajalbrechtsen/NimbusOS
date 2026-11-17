@@ -4,7 +4,9 @@
 # =============================================================================
 # What: builds small squashfs images that imitate the finished live image, one
 #       correct and one for each failure the check must catch, and runs
-#       nimbus_check_image_apt (build/lib/common.sh) against each:
+#       nimbus_check_image_apt (build/lib/common.sh) against each. The
+#       sources are the real build/config/archives files, rendered as
+#       build.sh renders them:
 #         good       docker.list from docker.list.binary, Signed-By on every
 #                    line, Docker's key only in the packaged keyring
 #         failures   build-time docker.list.chroot left in place; a deb line
@@ -29,10 +31,11 @@ ROOT="$(cd "$(dirname "$(readlink -f "$0")")/../.." && pwd -P)"
 # A throwaway "Docker" key, made before common.sh is loaded so that its
 # fingerprint can stand in for Docker's.
 KEYHOME="$(mktemp -d "${TMPDIR:-/tmp}/nimbus-image-test-gpg.XXXXXXXX")"
-if ! command -v gpg >/dev/null 2>&1 || ! command -v mksquashfs >/dev/null 2>&1; then
-	[[ "$(id -u)" -eq 0 ]] || { echo "image-apt-check.test: needs gpg and squashfs-tools" >&2; exit 2; }
+if ! command -v gpg >/dev/null 2>&1 || ! command -v gpg-agent >/dev/null 2>&1 \
+	|| ! command -v mksquashfs >/dev/null 2>&1; then
+	[[ "$(id -u)" -eq 0 ]] || { echo "image-apt-check.test: needs gpg, gpg-agent and squashfs-tools" >&2; exit 2; }
 	DEBIAN_FRONTEND=noninteractive apt-get update -q >/dev/null
-	DEBIAN_FRONTEND=noninteractive apt-get install -y -q --no-install-recommends gpg squashfs-tools >/dev/null
+	DEBIAN_FRONTEND=noninteractive apt-get install -y -q --no-install-recommends gpg gpg-agent squashfs-tools >/dev/null
 fi
 GNUPGHOME="$KEYHOME" gpg --batch --quiet --pinentry-mode loopback --passphrase '' \
 	--quick-gen-key "Docker stand-in <docker-standin@example.invalid>" ed25519 sign 1d
@@ -51,15 +54,20 @@ passed=0
 failed=0
 nimbus_mktemp_dir WORK
 
-# make_image NAME — builds $WORK/NAME.squashfs from the "good" layout after
-# running the function mutate_NAME (if defined) on it.
+# render_real FILE DEST — one of the real build/config/archives files, with
+# its @NIMBUS_*@ tokens filled in exactly as build.sh does it.
+render_real() {
+	cp -- "$ROOT/build/config/archives/$1" "$2"
+	nimbus_render_tokens "$2"
+}
+
+# make_image NAME — builds $WORK/NAME.squashfs from the "good" layout (the
+# real docker.list.binary as live-build installs it) after running the
+# function mutate_NAME (if defined) on it.
 make_image() {
 	local name="$1" root="$WORK/$1"
 	mkdir -p "$root/etc/apt/sources.list.d" "$root/etc/apt/trusted.gpg.d" "$root/usr/share/keyrings"
-	cat >"$root/etc/apt/sources.list.d/docker.list" <<EOF
-# ${NIMBUS_DOCKER_LIST_BINARY_MARKER}
-deb [signed-by=${NIMBUS_DOCKER_KEYRING_PATH}] ${NIMBUS_DOCKER_APT_URL} ${NIMBUS_DEBIAN_SUITE} stable
-EOF
+	render_real docker.list.binary "$root/etc/apt/sources.list.d/docker.list"
 	printf 'deb %s %s main\n' "$NIMBUS_MIRROR" "$NIMBUS_DEBIAN_SUITE" >"$root/etc/apt/sources.list"
 	GNUPGHOME="$KEYHOME" gpg --batch --quiet --dearmor <"$KEYHOME/docker.asc" >"$root$NIMBUS_DOCKER_KEYRING_PATH"
 	if declare -F "mutate_$name" >/dev/null; then
@@ -69,7 +77,8 @@ EOF
 }
 
 mutate_chroot_list_left() {
-	sed -i "s/${NIMBUS_DOCKER_LIST_BINARY_MARKER}/${NIMBUS_DOCKER_LIST_CHROOT_MARKER}/" "$1/etc/apt/sources.list.d/docker.list"
+	# As if live-build had left the build-time source in place.
+	render_real docker.list.chroot "$1/etc/apt/sources.list.d/docker.list"
 }
 mutate_line_without_signed_by() {
 	printf 'deb %s %s stable\n' "$NIMBUS_DOCKER_APT_URL" "$NIMBUS_DEBIAN_SUITE" >>"$1/etc/apt/sources.list.d/docker.list"

@@ -6,8 +6,8 @@
 #       with Docker or Podman. The repository is bind-mounted read-write at
 #       /src, which is also the working directory, and you are root inside.
 #       Unless --no-setup is given, the container first installs the basic
-#       developer tools (git, dpkg-dev, debhelper, devscripts, gpg, gpgv, curl,
-#       ca-certificates). Then it runs COMMAND, or an interactive shell if no
+#       developer tools (git, dpkg-dev, debhelper, devscripts, gpg, gpg-agent,
+#       gpgv, curl, ca-certificates). Then it runs COMMAND, or an interactive shell if no
 #       command is given. The container is deleted when it exits.
 #
 # Why:  building and testing need a real Debian 13 userland (dpkg, apt,
@@ -43,7 +43,9 @@ run_inside() {
 	local setup="$1"
 	shift
 	if [[ "$setup" == 1 ]]; then
-		nimbus_apt_install_missing git ca-certificates curl gpg gpgv dpkg-dev debhelper devscripts
+		# gpg-agent: gpg only Recommends it, but generating keys (tests,
+		# --allow-test-key) needs it.
+		nimbus_apt_install_missing git ca-certificates curl gpg gpg-agent gpgv dpkg-dev debhelper devscripts
 	fi
 	if (($#)); then
 		exec "$@"

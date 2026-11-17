@@ -1,0 +1,24 @@
+# =============================================================================
+# docker.list.chroot - Docker CE source used only WHILE BUILDING the image
+# nimbus:docker.list.chroot
+# =============================================================================
+# What: Docker's official Trixie repository, from which live-build installs
+#       the packages in package-lists/50-docker.list.chroot.
+# Why:  Docker CE is not in Debian (spec Tab A). During the chroot stage
+#       live-build writes this file as /etc/apt/sources.list.d/docker.list and
+#       trusts it through docker.key.chroot, which it copies to
+#       /etc/apt/trusted.gpg.d/docker.key.chroot.asc. At the end of the chroot
+#       stage live-build deletes both again and installs docker.list.binary
+#       in their place (live-build 1:20250505, chroot_archives). So this
+#       source deliberately has no signed-by option, and nothing from it
+#       stays in the image (docs/PLAN.md NOTE-03). build/build.sh checks the
+#       finished image for exactly that.
+# Key:  docker.key.chroot is Docker's signing key, kept byte-identical to
+#       Docker's download. Fingerprint:
+#           9DC8 5822 9FC7 DD38 854A  E2D8 8D81 803C 0EBF CD88
+#       Checked by build/build.sh, tools/build-debs.sh and CI
+#       (tools/fetch-docker-key.sh --verify-local); refresh it with
+#       tools/fetch-docker-key.sh.
+# Tokens: @NIMBUS_*@ values are filled in from build/nimbus.conf by build.sh.
+# =============================================================================
+deb [arch=@NIMBUS_ARCH@] @NIMBUS_DOCKER_APT_URL@ @NIMBUS_DEBIAN_SUITE@ stable

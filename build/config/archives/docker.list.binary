@@ -1,0 +1,21 @@
+# =============================================================================
+# docker.list.binary - Docker CE source of the NimbusOS image
+# nimbus:docker.list.binary
+# =============================================================================
+# What: Docker's official Trixie repository as installed systems use it.
+#       At the end of the chroot stage live-build writes this file as
+#       /etc/apt/sources.list.d/docker.list, after removing the build-time
+#       source, so it is part of the image and of every installed system.
+# Why:  Docker CE updates come from Docker (spec Tab A, ground rule 1). The
+#       source is tied to exactly one key through signed-by. That keyring
+#       file is shipped by the nimbusos-docker-keyring package, so a Docker
+#       key rotation reaches installed systems as a normal NimbusOS update.
+#       nimbusos-release's apt pinning lets this origin supply only the
+#       Docker packages (NOTE-05). No package ships a Docker source, so apt
+#       never sees two entries with different signed-by values (NOTE-03).
+# Key:  Docker's signing key, fingerprint
+#           9DC8 5822 9FC7 DD38 854A  E2D8 8D81 803C 0EBF CD88
+#       (checked by tools/fetch-docker-key.sh --verify-local in CI).
+# Tokens: @NIMBUS_*@ values are filled in from build/nimbus.conf by build.sh.
+# =============================================================================
+deb [arch=@NIMBUS_ARCH@ signed-by=@NIMBUS_DOCKER_KEYRING_PATH@] @NIMBUS_DOCKER_APT_URL@ @NIMBUS_DEBIAN_SUITE@ stable
