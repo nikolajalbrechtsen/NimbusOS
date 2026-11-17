@@ -13,6 +13,7 @@ Package: nimbusos-branding
 Architecture: all
 Multi-Arch: foreign
 Depends: ${misc:Depends},
+ desktop-base,
  papirus-icon-theme,
  breeze-cursor-theme,
  fonts-inter,

@@ -4,11 +4,19 @@
 # =============================================================================
 # What: on removal, gives Plymouth back the distribution's default theme if
 #       "nimbusos" was selected, and rebuilds the initramfs through the
-#       update-initramfs trigger. On purge, regenerates the GRUB menu, because
-#       /etc/default/grub.d/10-nimbusos.cfg (a conffile) is only deleted then.
+#       update-initramfs trigger. On removal and again on purge, regenerates
+#       the GRUB menu: removal takes the GRUB theme files away and moves the
+#       desktop-grub background back to Debian's (prerm), and purge deletes
+#       /etc/default/grub.d/10-nimbusos.cfg (a conffile).
 # Why:  leave a bootable system that looks like Debian again.
 # =============================================================================
 set -e
+
+regenerate_grub() {
+	if command -v update-grub >/dev/null 2>&1 && [ -e /boot/grub/grub.cfg ]; then
+		update-grub 2>&1 || echo "nimbusos-branding: update-grub failed; run 'sudo update-grub'." >&2
+	fi
+}
 
 case "$1" in
 	remove)
@@ -20,11 +28,10 @@ case "$1" in
 			plymouth-set-default-theme --reset || true
 			dpkg-trigger --no-await update-initramfs || true
 		fi
+		regenerate_grub
 		;;
 	purge)
-		if command -v update-grub >/dev/null 2>&1 && [ -e /boot/grub/grub.cfg ]; then
-			update-grub 2>&1 || echo "nimbusos-branding: update-grub failed; run 'sudo update-grub'." >&2
-		fi
+		regenerate_grub
 		;;
 esac
 

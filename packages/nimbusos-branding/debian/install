@@ -10,6 +10,7 @@ calamares/nimbusos/* usr/share/calamares/branding/nimbusos/
 art/logo.svg usr/share/calamares/branding/nimbusos/
 build/look-and-feel/org.nimbusos.desktop usr/share/plasma/look-and-feel/
 build/wallpapers/NimbusSky usr/share/wallpapers/
+build/desktop-base/nimbusos-theme usr/share/desktop-base/
 color-schemes/NimbusDark.colors usr/share/color-schemes/
 build/icons/nimbusos.svg usr/share/icons/hicolor/scalable/apps/
 build/xdg/kdeglobals etc/xdg/

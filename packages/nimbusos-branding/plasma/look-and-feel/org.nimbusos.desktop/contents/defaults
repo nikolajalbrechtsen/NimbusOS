@@ -12,7 +12,7 @@ Theme=Papirus-Dark
 name=breeze-dark
 
 [Wallpaper]
-Image=NimbusSky
+Image=DebianTheme
 
 [kcminputrc][Mouse]
 cursorTheme=breeze_cursors

@@ -27,14 +27,27 @@ LNF           := org.nimbusos.desktop
 width  = $(word 1,$(subst x, ,$1))
 height = $(word 2,$(subst x, ,$1))
 
-.PHONY: all clean wallpaper grub plymouth plasma icons xdg
+.PHONY: all clean wallpaper grub plymouth plasma icons xdg desktop-base
 
-all: wallpaper grub plymouth plasma icons xdg
+all: wallpaper grub plymouth plasma icons xdg desktop-base
 
 # --- Wallpaper package ----------------------------------------------------------
 WALLPAPER_PNGS := $(foreach s,$(WALLPAPER_SIZES),$(B)/wallpapers/NimbusSky/contents/images/$(s).png)
 
-wallpaper: $(WALLPAPER_PNGS) $(B)/wallpapers/NimbusSky/metadata.json $(B)/wallpapers/NimbusSky/contents/screenshot.png
+wallpaper: $(WALLPAPER_PNGS) $(B)/wallpapers/NimbusSky/metadata.json $(B)/wallpapers/NimbusSky/contents/screenshot.png \
+           $(B)/wallpapers/NimbusSky/contents/images/1920x1080.svg $(B)/wallpapers/NimbusSky/gnome-background.xml
+
+# desktop-base's desktop-background alternative points at
+# <active-theme>/wallpaper/contents/images/1920x1080.svg, and the
+# background.xml alternative at <active-theme>/wallpaper/gnome-background.xml;
+# the NimbusOS theme's "wallpaper" is a link to this wallpaper (debian/links).
+$(B)/wallpapers/NimbusSky/contents/images/1920x1080.svg: art/wallpaper.svg
+	mkdir -p $(@D)
+	cp $< $@
+
+$(B)/wallpapers/NimbusSky/gnome-background.xml: desktop-base/gnome-background.xml
+	mkdir -p $(@D)
+	cp $< $@
 
 $(B)/wallpapers/NimbusSky/contents/images/%.png: art/wallpaper.svg
 	mkdir -p $(@D)
@@ -119,6 +132,36 @@ $(B)/xdg/kdeglobals: xdg/kdeglobals.head color-schemes/NimbusDark.colors
 	mkdir -p $(@D)
 	cp xdg/kdeglobals.head $@
 	awk '/^\[/ { keep = ($$0 ~ /^\[(ColorEffects|Colors):/) } keep' color-schemes/NimbusDark.colors >> $@
+
+# --- desktop-base compatible theme directory (docs/PLAN.md NOTE-56) ---------
+# The postinst registers this directory as desktop-base's "desktop-theme"
+# alternative. desktop-base's other alternatives point into <active-theme>/...
+# and are registered only if those paths exist, so every one must be here.
+# "wallpaper" and "plymouth" are links (debian/links), as in Debian's themes.
+DBT := $(B)/desktop-base/nimbusos-theme
+
+desktop-base: $(DBT)/grub/grub-16x9.png $(DBT)/grub/grub-4x3.png $(DBT)/grub/grub_background.sh \
+              $(DBT)/login/background.svg $(DBT)/lockscreen/gnome-background.xml
+
+$(DBT)/grub/grub-16x9.png: art/wallpaper.svg
+	mkdir -p $(@D)
+	$(RSVG) --format png --width 1920 --height 1080 --output $@ $<
+
+$(DBT)/grub/grub-4x3.png: art/wallpaper.svg
+	mkdir -p $(@D)
+	$(RSVG) --format png --width 1280 --height 960 --output $@ $<
+
+$(DBT)/login/background.svg: art/wallpaper.svg
+	mkdir -p $(@D)
+	cp $< $@
+
+$(DBT)/lockscreen/gnome-background.xml: desktop-base/gnome-background.xml
+	mkdir -p $(@D)
+	cp $< $@
+
+$(DBT)/grub/grub_background.sh: desktop-base/grub_background.sh
+	mkdir -p $(@D)
+	cp $< $@
 
 clean:
 	rm -rf $(B)

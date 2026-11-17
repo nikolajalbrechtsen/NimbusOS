@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Nimbus Sky for desktops that read GNOME background XML (the
+     desktop-background.xml and desktop-lockscreen.xml alternatives that
+     desktop-base defines). nimbusos-branding, CC-BY-SA-4.0. -->
+<background>
+  <static>
+    <duration>8640000.0</duration>
+    <file>
+      <size width="1920" height="1080">/usr/share/wallpapers/NimbusSky/contents/images/1920x1080.png</size>
+      <size width="2560" height="1440">/usr/share/wallpapers/NimbusSky/contents/images/2560x1440.png</size>
+      <size width="3840" height="2160">/usr/share/wallpapers/NimbusSky/contents/images/3840x2160.png</size>
+    </file>
+  </static>
+</background>

@@ -2,12 +2,21 @@
 # =============================================================================
 # postinst for nimbusos-branding
 # =============================================================================
-# What: 1. Plymouth: selects the "nimbusos" theme while the distribution's
-#          default theme is still in use. A theme the administrator chose
-#          is never replaced. The initramfs is rebuilt through the
-#          update-initramfs trigger (debian/triggers).
-#       2. GRUB: regenerates the boot menu so the NimbusOS theme and name
-#          take effect, but only where GRUB is installed. A failure is
+# What: 0. Registers /usr/share/desktop-base/nimbusos-theme as desktop-base's
+#          "desktop-theme" alternative at priority 80 (Debian's highest is
+#          ceratopsian at 50). desktop-base's background, background.xml,
+#          lockscreen.xml, login-background, plasma5-wallpaper and grub
+#          alternatives all point through the active theme at their top
+#          priority, so they follow (docs/PLAN.md NOTE-56). A choice made
+#          with "update-alternatives --set" is kept (manual mode), and
+#          removing this package (prerm) falls back to Debian's theme.
+#       1. Plymouth: Trixie has no Plymouth alternative (NOTE-56), so
+#          "nimbusos" is selected only while the administrator hasn't chosen
+#          a theme. The initramfs is rebuilt through the update-initramfs
+#          trigger (debian/triggers).
+#       2. GRUB: regenerates the boot menu so the NimbusOS theme, name and
+#          desktop-grub background take effect, but only where GRUB is
+#          installed (Trixie has no update-grub trigger). A failure is
 #          reported, not fatal: the old menu keeps working.
 #       3. SDDM: on a new system, starts the login screen's session list on
 #          Plasma (Wayland) (docs/PLAN.md NOTE-08); an existing choice is kept.
@@ -18,6 +27,10 @@ set -e
 
 case "$1" in
 	configure)
+		# 0. desktop-base's theme switch
+		update-alternatives --install /usr/share/desktop-base/active-theme desktop-theme \
+			/usr/share/desktop-base/nimbusos-theme 80
+
 		# 1. Plymouth: the administrator's choice is a Theme= line in
 		#    /etc/plymouth/plymouthd.conf. Without one (or with the
 		#    distribution default), NimbusOS's theme is selected.

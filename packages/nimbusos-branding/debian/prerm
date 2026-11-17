@@ -1,0 +1,23 @@
+#!/bin/sh
+# =============================================================================
+# prerm for nimbusos-branding
+# =============================================================================
+# What: removes the NimbusOS entry from desktop-base's "desktop-theme"
+#       alternative before its files disappear. The alternative then falls
+#       back to Debian's highest-priority theme (ceratopsian), and every
+#       desktop-base alternative that points through the active theme
+#       follows it. Upgrades keep the entry.
+# Why:  docs/PLAN.md NOTE-56: removing nimbusos-branding returns the system
+#       to Debian's look without broken links.
+# =============================================================================
+set -e
+
+case "$1" in
+	remove|deconfigure)
+		update-alternatives --remove desktop-theme /usr/share/desktop-base/nimbusos-theme
+		;;
+esac
+
+#DEBHELPER#
+
+exit 0
