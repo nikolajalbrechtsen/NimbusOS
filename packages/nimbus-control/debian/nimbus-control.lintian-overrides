@@ -1,0 +1,14 @@
+# =============================================================================
+# lintian overrides for nimbus-control (each one is deliberate)
+# =============================================================================
+# On the first install only, the postinst disables samba's nmbd.service
+# (NetBIOS off by default, docs/PLAN.md NOTE-61). deb-systemd-helper manages
+# a package's own units; for another package's unit, "systemctl disable" is
+# the tool, and samba's postinst keeps a disabled unit disabled on upgrades.
+# It works offline, so also in the image build chroot. Nothing is started
+# with systemctl: starts and restarts go through deb-systemd-invoke.
+nimbus-control: maintainer-script-calls-systemctl [postinst:*]
+
+# Docker sets the iptables FORWARD policy to DROP every time it starts, so
+# nimbus-netfix must run every time docker.service starts (NOTE-19).
+nimbus-control: systemd-service-file-refers-to-unusual-wantedby-target docker.service [usr/lib/systemd/system/nimbus-netfix.service]

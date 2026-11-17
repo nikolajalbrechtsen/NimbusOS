@@ -18,6 +18,12 @@
 %:
 	dh $@ --with python3
 
+# dh_installsysusers is not in compat 13's default sequence. It runs before
+# dh_installtmpfiles so that, in the postinst, the accounts exist before
+# systemd-tmpfiles hands directories to them.
+execute_before_dh_installtmpfiles:
+	dh_installsysusers
+
 override_dh_python3:
 	dh_python3 /usr/lib/nimbus-control
 
