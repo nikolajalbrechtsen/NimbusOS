@@ -1,0 +1,14 @@
+#! nimbus: exclude-from-desktop-depends
+# =============================================================================
+# 90-nimbusos.list.chroot - the NimbusOS metapackage
+# =============================================================================
+# What: nimbusos-desktop, which pulls in every NimbusOS package and every
+#       package from the other lists.
+# Why:  the image and installed systems are defined by the same metapackage
+#       (ground rule 2). The .deb files themselves are placed in
+#       config/packages.chroot/ by build/build.sh. This list is excluded from
+#       nimbusos-desktop's own Depends by the marker line above.
+# Format rules: see 10-base.list.chroot.
+# =============================================================================
+
+nimbusos-desktop

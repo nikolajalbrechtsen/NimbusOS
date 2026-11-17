@@ -4,8 +4,10 @@
 # =============================================================================
 # What: logging and error reporting, nimbus.conf loading and validation,
 #       build-host checks, host package installation, OpenPGP key checks,
-#       the NimbusOS APT repository check, @NIMBUS_*@ template rendering,
-#       the complete `lb config` flag list, and .deb set validation.
+#       the NimbusOS APT repository check, private APT configurations,
+#       live-build package-list parsing, @NIMBUS_*@ template rendering,
+#       the complete `lb config` flag list, .deb set validation and the
+#       final image's APT check.
 #
 # Why:  every helper has exactly one implementation. Most importantly, the
 #       `lb config` flags live here so build/build.sh and
@@ -31,15 +33,22 @@ _NIMBUS_COMMON_LOADED=1
 NIMBUS_REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)"
 _nimbus_prog="$(basename "$0")"
 
-# The six NimbusOS packages, in build order (docs/PLAN.md §3).
+# The seven NimbusOS packages, in build order (docs/PLAN.md §3).
 NIMBUS_PACKAGES=(
 	nimbusos-archive-keyring
+	nimbusos-docker-keyring
 	nimbusos-release
 	nimbusos-branding
 	nimbus-control
 	nimbus-catalog
 	nimbusos-desktop
 )
+
+# Marker comments in build/config/archives/docker.list.{chroot,binary}. The
+# image check below uses them to prove the final image carries the .binary
+# source and not the build-time one (docs/PLAN.md NOTE-03).
+NIMBUS_DOCKER_LIST_CHROOT_MARKER="nimbus:docker.list.chroot"
+NIMBUS_DOCKER_LIST_BINARY_MARKER="nimbus:docker.list.binary"
 
 # -----------------------------------------------------------------------------
 # Logging and error handling
@@ -251,14 +260,13 @@ Run tools/fetch-docker-key.sh to download it again."
 	log "Docker key OK ($NIMBUS_DOCKER_KEY_FPR)."
 }
 
-# nimbus_check_keyring_deb DEB — the built keyring package must trust exactly
-# the committed NimbusOS keys and Docker's key (catches a test-key build).
-nimbus_check_keyring_deb() {
-	local deb="$1" tmp want got docker
+# nimbus_check_archive_keyring_deb DEB — nimbusos-archive-keyring must trust
+# exactly the committed NimbusOS keys (catches a test-key build).
+nimbus_check_archive_keyring_deb() {
+	local deb="$1" tmp want got
 	nimbus_mktemp_dir tmp
 	dpkg-deb -x "$deb" "$tmp"
 	[[ -s "$tmp$NIMBUS_ARCHIVE_KEYRING_PATH" ]] || die "$(basename "$deb") does not ship $NIMBUS_ARCHIVE_KEYRING_PATH."
-	[[ -s "$tmp$NIMBUS_DOCKER_KEYRING_PATH" ]] || die "$(basename "$deb") does not ship $NIMBUS_DOCKER_KEYRING_PATH."
 	want="$(nimbus_archive_fingerprints)"
 	[[ -n "$want" ]] || die "No NimbusOS public key is committed in $NIMBUS_ARCHIVE_KEYS_DIR/. Create one as described in docs/SIGNING.md."
 	got="$(nimbus_key_fingerprints "$tmp$NIMBUS_ARCHIVE_KEYRING_PATH" | LC_ALL=C sort -u)"
@@ -266,8 +274,161 @@ nimbus_check_keyring_deb() {
   in the package: $(echo "$got" | tr '\n' ' ')
   committed:      $(echo "$want" | tr '\n' ' ')
 Was it built with tools/build-debs.sh --allow-test-key? Such packages must never go into an image."
+}
+
+# nimbus_check_docker_keyring_deb DEB — nimbusos-docker-keyring must ship
+# exactly Docker's key at the path docker.list.binary names in Signed-By.
+nimbus_check_docker_keyring_deb() {
+	local deb="$1" tmp docker
+	nimbus_mktemp_dir tmp
+	dpkg-deb -x "$deb" "$tmp"
+	[[ -s "$tmp$NIMBUS_DOCKER_KEYRING_PATH" ]] || die "$(basename "$deb") does not ship $NIMBUS_DOCKER_KEYRING_PATH."
 	docker="$(nimbus_key_fingerprints "$tmp$NIMBUS_DOCKER_KEYRING_PATH")"
-	[[ "$docker" == "$NIMBUS_DOCKER_KEY_FPR" ]] || die "$(basename "$deb") ships a Docker keyring with fingerprint '${docker:-none}', expected $NIMBUS_DOCKER_KEY_FPR."
+	[[ "$docker" == "$NIMBUS_DOCKER_KEY_FPR" ]] \
+		|| die "$(basename "$deb") ships a Docker keyring with fingerprint '${docker:-none}', expected $NIMBUS_DOCKER_KEY_FPR."
+}
+
+# -----------------------------------------------------------------------------
+# Private APT configurations (build.sh --from-repo, tools/verify-trixie.sh)
+# -----------------------------------------------------------------------------
+# nimbus_apt_private_init DIR — set up an APT configuration that lives
+# entirely in DIR: its own sources, lists, cache, trusted keys and an empty
+# dpkg status (so dependency resolution starts from nothing, like a fresh
+# chroot). The host's APT setup is neither read nor changed. Callers add
+# DIR/etc/sources.list.d/*.sources and run:  APT_CONFIG=DIR/apt.conf apt-get ...
+nimbus_apt_private_init() {
+	local dir="$1"
+	mkdir -p "$dir/etc/apt.conf.d" "$dir/etc/sources.list.d" "$dir/etc/preferences.d" \
+		"$dir/etc/trusted.gpg.d" "$dir/state/lists/partial" "$dir/cache/archives/partial"
+	: >"$dir/etc/sources.list"
+	: >"$dir/status"
+	cat >"$dir/apt.conf" <<EOF
+// Private APT configuration created by build/lib/common.sh.
+Dir::Etc "${dir}/etc";
+Dir::State "${dir}/state";
+Dir::State::status "${dir}/status";
+Dir::Cache "${dir}/cache";
+APT::Architecture "${NIMBUS_ARCH}";
+APT::Architectures { "${NIMBUS_ARCH}"; };
+APT::Sandbox::User "root";
+Acquire::Retries "3";
+EOF
+}
+
+# nimbus_debian_keyring — path of the Debian archive keyring on this host
+# (Trixie names it .pgp; older releases used .gpg).
+nimbus_debian_keyring() {
+	local k
+	for k in /usr/share/keyrings/debian-archive-keyring.pgp /usr/share/keyrings/debian-archive-keyring.gpg; do
+		if [[ -s "$k" ]]; then
+			printf '%s\n' "$k"
+			return 0
+		fi
+	done
+	die "The Debian archive keyring is missing; install debian-archive-keyring."
+}
+
+# -----------------------------------------------------------------------------
+# live-build package lists
+# -----------------------------------------------------------------------------
+# nimbus_parse_package_list FILE — print the package names in a live-build
+# package list, one per line, after checking the format rules that
+# live-build's Expand_packagelist imposes (live-build 1:20250505):
+#   * the file is passed through printf as a FORMAT string, so a percent sign
+#     or a backslash anywhere breaks it;
+#   * a line starting with "!" is executed as a shell command;
+#   * "#if ", "#nif " and "#endif" are conditionals, every other line starting
+#     with "#" is a comment;
+#   * there are no trailing comments: "pkg # note" would install "#" and "note".
+# NimbusOS lists use one package name per line and plain "# " comments only.
+nimbus_parse_package_list() {
+	local file="$1" line n=0 name_re='^[a-z0-9][a-z0-9+.-]+$'
+	if grep -q '[%\\]' -- "$file"; then
+		die "$file contains a percent sign or a backslash; live-build passes package lists through printf."
+	fi
+	while IFS= read -r line || [[ -n "$line" ]]; do
+		n=$((n + 1))
+		line="${line#"${line%%[![:space:]]*}"}"      # trim leading whitespace
+		line="${line%"${line##*[![:space:]]}"}"      # trim trailing whitespace
+		case "$line" in
+			"") continue ;;
+			"#if "*|"#nif "*|"#endif"*)
+				die "$file:$n: live-build conditionals are not used in NimbusOS lists: $line" ;;
+			"#"*) continue ;;
+			"!"*)
+				die "$file:$n: a line starting with ! would be run as a shell command by live-build." ;;
+		esac
+		[[ "$line" =~ $name_re ]] \
+			|| die "$file:$n: expected one package name per line (no trailing comments), got: $line"
+		printf '%s\n' "$line"
+	done <"$file"
+}
+
+# nimbus_list_excluded_from_desktop FILE — true if the list is marked
+#   #! nimbus: exclude-from-desktop-depends
+# (Calamares, which removes itself after install, and the metapackage's own
+# list; docs/PLAN.md NOTE-48).
+nimbus_list_excluded_from_desktop() {
+	grep -qx '#! nimbus: exclude-from-desktop-depends' -- "$1"
+}
+
+# -----------------------------------------------------------------------------
+# Final image checks (run by build.sh after lb build)
+# -----------------------------------------------------------------------------
+# nimbus_check_image_apt SQUASHFS — the image must carry the final Docker
+# source from docker.list.binary (Signed-By the packaged keyring), and no
+# trace of the build-time source or the build-only key (docs/PLAN.md NOTE-03).
+nimbus_check_image_apt() {
+	local sq="$1" tmp root list f fprs line
+	local -a problems=()
+	nimbus_mktemp_dir tmp
+	root="$tmp/root"
+	unsquashfs -no-progress -no-xattrs -dest "$root" "$sq" etc/apt usr/share/keyrings >/dev/null
+
+	list="$root/etc/apt/sources.list.d/docker.list"
+	if [[ ! -f "$list" ]]; then
+		problems+=("/etc/apt/sources.list.d/docker.list (from config/archives/docker.list.binary) is missing")
+	else
+		grep -q "$NIMBUS_DOCKER_LIST_BINARY_MARKER" "$list" \
+			|| problems+=("/etc/apt/sources.list.d/docker.list is not the docker.list.binary source")
+		while IFS= read -r line; do
+			[[ "$line" == *"signed-by=${NIMBUS_DOCKER_KEYRING_PATH}"* ]] \
+				|| problems+=("docker.list line without signed-by=${NIMBUS_DOCKER_KEYRING_PATH}: $line")
+		done < <(grep -E '^[[:space:]]*deb(-src)?[[:space:]]' "$list" || true)
+	fi
+	for f in "$root"/etc/apt/sources.list "$root"/etc/apt/sources.list.d/*; do
+		[[ -f "$f" ]] || continue
+		if grep -q "$NIMBUS_DOCKER_LIST_CHROOT_MARKER" "$f"; then
+			problems+=("${f#"$root"} is the build-time docker.list.chroot")
+		fi
+		if [[ "$f" != "$list" ]] && grep -qE '^[^#]*download\.docker\.com' "$f"; then
+			problems+=("${f#"$root"} adds a second Docker source")
+		fi
+	done
+	for f in "$root"/etc/apt/trusted.gpg "$root"/etc/apt/trusted.gpg.d/*; do
+		[[ -f "$f" ]] || continue
+		if [[ "$(basename "$f")" == *docker* ]]; then
+			problems+=("build-only key left in the image: ${f#"$root"}")
+			continue
+		fi
+		fprs="$(nimbus_key_fingerprints "$f")"
+		if [[ "$fprs" == *"$NIMBUS_DOCKER_KEY_FPR"* ]]; then
+			problems+=("Docker's key is globally trusted through ${f#"$root"}")
+		fi
+	done
+	f="$root$NIMBUS_DOCKER_KEYRING_PATH"
+	if [[ ! -s "$f" ]]; then
+		problems+=("$NIMBUS_DOCKER_KEYRING_PATH (nimbusos-docker-keyring) is missing")
+	elif [[ "$(nimbus_key_fingerprints "$f")" != "$NIMBUS_DOCKER_KEY_FPR" ]]; then
+		problems+=("$NIMBUS_DOCKER_KEYRING_PATH does not hold exactly Docker's key")
+	fi
+
+	if ((${#problems[@]})); then
+		printf '[%s] ERROR: image APT check failed for %s:\n' "$_nimbus_prog" "$sq" >&2
+		printf '  - %s\n' "${problems[@]}" >&2
+		exit 1
+	fi
+	log "Image APT check OK: docker.list from docker.list.binary, Signed-By $NIMBUS_DOCKER_KEYRING_PATH, no build-only key."
 }
 
 # -----------------------------------------------------------------------------
@@ -321,7 +482,7 @@ Check that APT_SIGNING_KEY matches a key in $NIMBUS_ARCHIVE_KEYS_DIR/ (docs/SIGN
 Run the refresh workflow (GitHub -> Actions -> refresh -> Run workflow) to re-sign it, then build again."
 		fi
 	else
-		warn "$url has no Valid-Until field; expected one from reprepro's ValidFor."
+		warn "$url has no Valid-Until field; tools/publish-apt.sh normally writes one."
 	fi
 	log "Repository OK: signed by a committed key, valid until ${valid_until:-<not set>}."
 }
@@ -453,7 +614,7 @@ nimbus_lb_config_args() {
 # -----------------------------------------------------------------------------
 
 # nimbus_check_deb_set DIR — DIR must contain exactly one .deb of each of the
-# six packages, all with the same version. Prints that version.
+# seven packages, all with the same version. Prints that version.
 nimbus_check_deb_set() {
 	local dir="$1" pkg v version=""
 	local -a found

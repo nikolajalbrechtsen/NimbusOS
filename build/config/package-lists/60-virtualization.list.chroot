@@ -1,0 +1,25 @@
+# =============================================================================
+# 60-virtualization.list.chroot - KVM/QEMU and libvirt for the VM manager
+# =============================================================================
+# What: QEMU, libvirt with the default NAT network, virt-install tools,
+#       UEFI firmware, software TPM, and noVNC with websockify for the
+#       in-browser console.
+# Why:  spec Tab B (runtime). swtpm-tools provides swtpm_setup, which libvirt
+#       needs to create a TPM for the Windows preset.
+# Format rules: see 10-base.list.chroot.
+# =============================================================================
+
+qemu-system-x86
+qemu-utils
+libvirt-daemon-system
+libvirt-daemon-driver-qemu
+libvirt-daemon-config-network
+libvirt-clients
+virtinst
+ovmf
+bridge-utils
+swtpm
+swtpm-tools
+novnc
+websockify
+python3-websockify

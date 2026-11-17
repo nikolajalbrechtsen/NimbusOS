@@ -1,0 +1,12 @@
+# =============================================================================
+# 97-installer-pool-luks.list.binary - disk encryption support (ISO pool)
+# =============================================================================
+# What: the packages Debian's bootloader-config installs in the target when
+#       the user chooses an encrypted installation.
+# Why:  offline encrypted installs from the ISO; see 95-installer-pool-bios.list.binary.
+# Format rules: see 10-base.list.chroot.
+# =============================================================================
+
+cryptsetup-initramfs
+cryptsetup
+keyutils

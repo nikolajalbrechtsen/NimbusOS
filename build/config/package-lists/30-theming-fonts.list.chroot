@@ -1,0 +1,26 @@
+# =============================================================================
+# 30-theming-fonts.list.chroot - icons, fonts and rendering support for Nimbus Dark
+# =============================================================================
+# What: the icon theme and fonts the Nimbus Dark theme and the Control Center
+#       use, plus SVG support for wallpapers, icons and installer artwork.
+# Why:  spec section 1 (Nimbus Dark theme). The theme itself ships in
+#       nimbusos-branding. The Control Center serves Inter and JetBrains Mono
+#       straight from these Debian packages, so their OFL license stays with
+#       Debian (docs/PLAN.md NOTE-13).
+# Format rules: see 10-base.list.chroot.
+# =============================================================================
+
+# Icons and cursors
+papirus-icon-theme
+breeze-cursor-theme
+
+# Fonts: Inter for the interface, JetBrains Mono for code, paths and numbers
+fonts-inter
+fonts-jetbrains-mono
+
+# SVG rendering: Qt 6 image plugin (Plasma, SDDM, Calamares) and the GTK loader
+qt6-svg-plugins
+librsvg2-common
+
+# Text rendering in the Plymouth boot splash (passphrase prompt)
+plymouth-label

@@ -1,0 +1,16 @@
+# =============================================================================
+# 50-docker.list.chroot - Docker CE from Docker's official Trixie repository
+# =============================================================================
+# What: the Docker engine, CLI, containerd and the Compose and Buildx plugins.
+# Why:  spec Tab A (runtime). These packages are not in Debian. They come from
+#       the signed source in build/config/archives/ (docs/PLAN.md NOTE-03),
+#       and on installed systems apt pinning lets that source supply only
+#       these packages (nimbusos-release, NOTE-05).
+# Format rules: see 10-base.list.chroot.
+# =============================================================================
+
+docker-ce
+docker-ce-cli
+containerd.io
+docker-compose-plugin
+docker-buildx-plugin

@@ -8,17 +8,21 @@
 #       2. checks Docker's key fingerprint and that the NimbusOS APT
 #          repository answers with a correctly signed, unexpired InRelease
 #          (docs/PLAN.md NOTE-04);
-#       3. gets the six NimbusOS .deb files: builds them with
+#       3. gets the seven NimbusOS .deb files: builds them with
 #          tools/build-debs.sh, takes them from --debs-dir, or downloads them
 #          from the published repository with --from-repo; then checks they
-#          share one version and carry the committed archive key;
+#          share one version and carry the committed archive key and
+#          Docker's key;
 #       4. prepares build/work/: a fresh copy of build/config/ with
-#          @NIMBUS_*@ tokens filled in, the .debs in config/packages.chroot/,
-#          bootloader overlays merged onto live-build's own templates, the
-#          GRUB theme taken from nimbusos-branding, splash images rendered;
+#          @NIMBUS_*@ tokens filled in, the .debs in config/packages.chroot/
+#          and the GRUB theme from nimbusos-branding. (live-build itself
+#          merges the bootloader overlays onto its templates and renders
+#          config/bootloaders/splash.svg.)
 #       5. runs `lb clean`, `lb config` (flags explained in
 #          build/lib/common.sh) and `lb build`;
-#       6. writes dist/nimbusos-amd64.iso and dist/nimbusos-amd64.iso.sha256.
+#       6. checks the finished image's APT setup (Docker source from
+#          docker.list.binary, no build-only source or key), then writes
+#          dist/nimbusos-amd64.iso and dist/nimbusos-amd64.iso.sha256.
 #
 # Why:  one reproducible, re-runnable entry point, used locally and by
 #       release.yml, so the ISO contains exactly the packages the APT
@@ -26,7 +30,7 @@
 #       modified; all generated files live in build/work/ and dist/.
 #
 # Usage: sudo ./build/build.sh [options]
-#   --debs-dir DIR      use the six .deb files in DIR (release.yml passes the
+#   --debs-dir DIR      use the seven .deb files in DIR (release.yml passes the
 #                       packages it has just published)
 #   --from-repo         download the .deb files from the published APT
 #                       repository instead of building them
@@ -73,29 +77,14 @@ fetch_from_repo() {
 
 	mapfile -t keys < <(nimbus_archive_key_files)
 	((${#keys[@]})) || die "No NimbusOS public key is committed in $NIMBUS_ARCHIVE_KEYS_DIR/; cannot verify downloads (docs/SIGNING.md)."
+	nimbus_apt_private_init "$tmp"
 	nimbus_dearmor_into "$tmp/nimbusos-archive.gpg" "${keys[@]}"
-
-	mkdir -p "$tmp/etc/apt.conf.d" "$tmp/etc/sources.list.d" "$tmp/etc/preferences.d" \
-		"$tmp/etc/trusted.gpg.d" "$tmp/state/lists/partial" "$tmp/cache/archives/partial"
-	: >"$tmp/etc/sources.list"
-	: >"$tmp/status"
 	cat >"$tmp/etc/sources.list.d/nimbusos.sources" <<EOF
 Types: deb
 URIs: ${NIMBUS_APT_URL}/
 Suites: ${opt_suite}
 Components: ${NIMBUS_APT_COMPONENT}
 Signed-By: ${tmp}/nimbusos-archive.gpg
-EOF
-	cat >"$tmp/apt.conf" <<EOF
-// Private APT configuration for build.sh --from-repo.
-Dir::Etc "${tmp}/etc";
-Dir::State "${tmp}/state";
-Dir::State::status "${tmp}/status";
-Dir::Cache "${tmp}/cache";
-APT::Architecture "${NIMBUS_ARCH}";
-APT::Architectures { "${NIMBUS_ARCH}"; };
-APT::Sandbox::User "root";
-Acquire::Retries "3";
 EOF
 
 	log "Downloading index of suite '$opt_suite' from $NIMBUS_APT_URL"
@@ -116,55 +105,25 @@ EOF
 }
 
 # -----------------------------------------------------------------------------
-# Bootloader overlays (docs/PLAN.md §1): live-build uses config/bootloaders/X
-# INSTEAD of its own template X, so each overlay is merged onto a copy of the
-# shipped template. Symbolic links in the templates are dereferenced, because
-# they point at sibling template directories that are not copied.
+# Live boot menu theme. live-build itself copies its own templates first and
+# then config/bootloaders/{grub-pc,isolinux,syslinux_common}/ on top, and it
+# renders config/bootloaders/splash.svg into both menus inside the chroot
+# (binary_grub_cfg, binary_syslinux, binary_bootloader_splash in live-build
+# 1:20250505). The only thing added here is the GRUB theme from the freshly
+# built nimbusos-branding, so live and installed boot share one theme.
 # -----------------------------------------------------------------------------
-prepare_bootloaders() {
-	local dir="$work/config/bootloaders" overlay name defaults merged extract theme svg
-	local -a branding svgs
-	[[ -d "$dir" ]] || return 0
-
-	for overlay in "$dir"/*/; do
-		overlay="${overlay%/}"
-		name="$(basename "$overlay")"
-		defaults="/usr/share/live/build/bootloaders/$name"
-		if [[ -d "$defaults" ]]; then
-			nimbus_mktemp_dir merged
-			cp -RL --preserve=mode,timestamps -- "$defaults/." "$merged/"
-			cp -R --preserve=mode,timestamps -- "$overlay/." "$merged/"
-			rm -rf -- "$overlay"
-			mkdir -p -- "$overlay"
-			cp -R --preserve=mode,timestamps -- "$merged/." "$overlay/"
-			log "bootloaders/$name: live-build template + NimbusOS overlay"
-		else
-			warn "live-build has no template for bootloaders/$name; using the NimbusOS files alone."
-		fi
-	done
-
-	# The live GRUB menu uses the same theme as installed systems.
-	if [[ -d "$dir/grub-pc" ]]; then
-		mapfile -t branding < <(find "$debs" -maxdepth 1 -name 'nimbusos-branding_*.deb')
-		nimbus_mktemp_dir extract
-		dpkg-deb -x "${branding[0]}" "$extract"
-		theme="$extract/usr/share/grub/themes/$NIMBUS_ID"
-		[[ -f "$theme/theme.txt" ]] || die "nimbusos-branding does not contain /usr/share/grub/themes/$NIMBUS_ID/theme.txt."
-		rm -rf -- "$dir/grub-pc/live-theme"
-		mkdir -p -- "$dir/grub-pc/live-theme"
-		cp -R --preserve=mode,timestamps -- "$theme/." "$dir/grub-pc/live-theme/"
-		log "bootloaders/grub-pc: live-theme taken from $(basename "${branding[0]}")"
-	fi
-
-	# Splash screens are kept as SVG in the repository (no binary assets) and
-	# rendered here; live-build's own splash template is dropped so it can't
-	# replace ours.
-	mapfile -t svgs < <(find "$dir" -type f -name 'splash.svg')
-	for svg in "${svgs[@]}"; do
-		rsvg-convert --format png --output "${svg%.svg}.png" -- "$svg"
-		rm -f -- "$svg" "$(dirname "$svg")/splash.svg.in"
-		log "Rendered ${svg#"$work/config/"} to PNG"
-	done
+prepare_grub_theme() {
+	local dir="$work/config/bootloaders/grub-pc" extract theme
+	local -a branding
+	mapfile -t branding < <(find "$debs" -maxdepth 1 -name 'nimbusos-branding_*.deb')
+	nimbus_mktemp_dir extract
+	dpkg-deb -x "${branding[0]}" "$extract"
+	theme="$extract/usr/share/grub/themes/$NIMBUS_ID"
+	[[ -f "$theme/theme.txt" ]] || die "nimbusos-branding does not contain /usr/share/grub/themes/$NIMBUS_ID/theme.txt."
+	rm -rf -- "$dir/live-theme"
+	mkdir -p -- "$dir/live-theme"
+	cp -R --preserve=mode,timestamps -- "$theme/." "$dir/live-theme/"
+	log "bootloaders/grub-pc/live-theme taken from $(basename "${branding[0]}")"
 }
 
 main() {
@@ -214,7 +173,7 @@ main() {
 	step "Build host"
 	nimbus_check_host
 	nimbus_apt_install_missing live-build debootstrap devscripts dpkg-dev debhelper \
-		gpg gpgv curl ca-certificates git librsvg2-bin xz-utils
+		gpg gpgv curl ca-certificates git squashfs-tools xz-utils
 	export LC_ALL=C.UTF-8
 
 	work="$(nimbus_path "$NIMBUS_WORK_DIR")"
@@ -258,7 +217,8 @@ main() {
 		"$NIMBUS_REPO_ROOT/tools/build-debs.sh" --out "$debs" --install-build-deps "${build_args[@]}"
 	fi
 	version="$(nimbus_check_deb_set "$debs")"
-	nimbus_check_keyring_deb "$(find "$debs" -maxdepth 1 -name 'nimbusos-archive-keyring_*.deb' -print -quit)"
+	nimbus_check_archive_keyring_deb "$(find "$debs" -maxdepth 1 -name 'nimbusos-archive-keyring_*.deb' -print -quit)"
+	nimbus_check_docker_keyring_deb "$(find "$debs" -maxdepth 1 -name 'nimbusos-docker-keyring_*.deb' -print -quit)"
 	display="${version/\~beta./-beta.}"
 	log "Packages OK: ${NIMBUS_NAME} $display ($version)"
 
@@ -287,7 +247,7 @@ main() {
 	fi
 	mkdir -p -- "$work/config/packages.chroot"
 	cp -- "$debs"/*.deb "$work/config/packages.chroot/"
-	prepare_bootloaders
+	prepare_grub_theme
 
 	# --- 5. live-build -------------------------------------------------------
 	step "lb config"
@@ -297,10 +257,15 @@ main() {
 	step "lb build (log: $work/build.log)"
 	lb build 2>&1 | tee "$work/build.log" >&2
 
-	# --- 6. Output -----------------------------------------------------------
-	step "Output"
+	# --- 6. Image checks and output ------------------------------------------
+	step "Checking the image"
 	iso_src="$work/${NIMBUS_IMAGE_NAME}-${NIMBUS_ARCH}.hybrid.iso"
 	[[ -f "$iso_src" ]] || die "lb build finished without producing $(basename "$iso_src"); see $work/build.log."
+	[[ -f "$work/binary/live/filesystem.squashfs" ]] \
+		|| die "$work/binary/live/filesystem.squashfs is missing; cannot check the image."
+	nimbus_check_image_apt "$work/binary/live/filesystem.squashfs"
+
+	step "Output"
 	iso="$out/${NIMBUS_ISO_BASENAME}.iso"
 	mv -f -- "$iso_src" "$iso"
 	manifest="$work/${NIMBUS_IMAGE_NAME}-${NIMBUS_ARCH}.packages"

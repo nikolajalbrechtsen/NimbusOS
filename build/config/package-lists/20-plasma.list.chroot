@@ -1,0 +1,48 @@
+# =============================================================================
+# 20-plasma.list.chroot - KDE Plasma 6 desktop and core applications
+# =============================================================================
+# What: Plasma 6 with both sessions (Wayland is the default, X11 stays
+#       available), SDDM, the standard KDE applications, Discover and the two
+#       browsers.
+# Why:  spec section 1 (Desktop and Apps rows). Discover's PackageKit backend
+#       is built into plasma-discover in Trixie; there is no separate
+#       backend package for it.
+# Format rules: see 10-base.list.chroot.
+# =============================================================================
+
+# Plasma desktop, both sessions, login manager
+kde-plasma-desktop
+sddm
+kde-config-sddm
+kwin-wayland
+kwin-x11
+xwayland
+
+# Desktop services and settings
+plasma-nm
+plasma-pa
+powerdevil
+bluedevil
+kscreen
+systemsettings
+kinfocenter
+xdg-desktop-portal-kde
+breeze-gtk-theme
+
+# Core applications
+konsole
+dolphin
+kate
+ark
+okular
+gwenview
+kde-spectacle
+
+# Software centre: Discover with PackageKit (built in) and Flatpak backends
+plasma-discover
+plasma-discover-backend-flatpak
+packagekit
+
+# Browsers. Chromium also runs the Nimbus Control Center app window.
+firefox-esr
+chromium

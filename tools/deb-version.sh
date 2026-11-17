@@ -3,7 +3,7 @@
 # tools/deb-version.sh — the NimbusOS version, derived from git
 # =============================================================================
 # What: turns the git state into the Debian version, APT suite, channel and
-#       display version shared by all six packages and the ISO.
+#       display version shared by all seven packages and the ISO.
 #
 # Why:  "the version comes from the git tag" (spec 4.1). Release tags map as
 #           vX.Y.Z         ->  X.Y.Z          suite stable, channel stable

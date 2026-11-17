@@ -1,0 +1,14 @@
+# =============================================================================
+# 95-installer-pool-bios.list.binary - GRUB for legacy BIOS installs (ISO pool)
+# =============================================================================
+# What: grub-pc and everything it depends on, placed in the ISO's package
+#       pool rather than installed in the live system.
+# Why:  Debian's Calamares step bootloader-config runs "apt-get install
+#       grub-pc" in the target from the ISO (sources-media) on BIOS machines,
+#       so this works offline. live-build resolves each .list.binary file on
+#       its own, against an empty package database, so BIOS and UEFI GRUB
+#       (which conflict) are kept in separate lists.
+# Format rules: see 10-base.list.chroot.
+# =============================================================================
+
+grub-pc

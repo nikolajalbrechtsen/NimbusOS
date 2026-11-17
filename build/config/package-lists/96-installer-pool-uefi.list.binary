@@ -1,0 +1,13 @@
+# =============================================================================
+# 96-installer-pool-uefi.list.binary - GRUB for UEFI installs (ISO pool)
+# =============================================================================
+# What: grub-efi (the package Debian's bootloader-config installs on UEFI
+#       machines) with its signed variants, so Secure Boot works.
+# Why:  offline UEFI installs from the ISO; see 95-installer-pool-bios.list.binary.
+# Format rules: see 10-base.list.chroot.
+# =============================================================================
+
+grub-efi
+grub-efi-amd64
+grub-efi-amd64-signed
+shim-signed

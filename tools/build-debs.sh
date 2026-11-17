@@ -1,19 +1,21 @@
 #!/bin/bash
 # =============================================================================
-# tools/build-debs.sh — build the six NimbusOS .deb packages
+# tools/build-debs.sh — build the seven NimbusOS .deb packages
 # =============================================================================
 # What: for each package in packages/, stages a self-contained copy in
 #       _build/src/<package>/ together with what it needs from elsewhere in
 #       the repository:
-#         nimbusos-archive-keyring  the committed public keys + Docker's key
+#         nimbusos-archive-keyring  the committed NimbusOS public keys
+#         nimbusos-docker-keyring   Docker's key (build/config/archives/)
 #         nimbus-control            control-center/
 #         nimbus-catalog            catalog/
 #         nimbusos-desktop          its Depends, generated from the package
 #                                   lists by tools/gen-desktop-depends.sh
 #       It then writes the build values (nimbus-build.env, debian/nimbus-build.mk),
 #       adds a debian/changelog entry for the version from git, and runs
-#       dpkg-buildpackage. Finally it checks that the six .debs share one
-#       version and that the keyring package trusts exactly the committed keys.
+#       dpkg-buildpackage. Finally it checks that the seven .debs share one
+#       version, that the archive keyring trusts exactly the committed keys,
+#       and that the Docker keyring holds exactly Docker's key.
 #
 # Why:  one build path for build/build.sh, ci.yml and release.yml, so the ISO
 #       and the APT repository always contain the same packages (ground
@@ -155,12 +157,16 @@ stage_package() {
 	case "$pkg" in
 		nimbusos-archive-keyring)
 			# keys/*.asc came with the copy above; add the throwaway key if
-			# one was generated, and Docker's (already fingerprint-checked) key.
-			mkdir -p -- "$dst/keys" "$dst/docker"
+			# one was generated.
+			mkdir -p -- "$dst/keys"
 			if [[ -n "$test_key_file" ]]; then
 				install -m 0644 -- "$test_key_file" "$dst/keys/"
 			fi
-			install -m 0644 -- "$(nimbus_path "$NIMBUS_DOCKER_KEY_FILE")" "$dst/docker/docker-archive-keyring.asc"
+			;;
+		nimbusos-docker-keyring)
+			# Docker's key, already fingerprint-checked by nimbus_check_docker_key.
+			# The canonical copy is the one live-build uses during the build.
+			install -m 0644 -- "$(nimbus_path "$NIMBUS_DOCKER_KEY_FILE")" "$dst/docker-archive-keyring.asc"
 			;;
 		nimbus-control)
 			[[ -d "$NIMBUS_REPO_ROOT/control-center" ]] || die "control-center/ is missing; cannot build nimbus-control."
@@ -259,15 +265,12 @@ main() {
 	export SOURCE_DATE_EPOCH
 	step "Building ${NIMBUS_NAME} packages $NIMBUS_VERSION (channel $NIMBUS_CHANNEL, commit $NIMBUS_GIT_COMMIT)"
 
-	# Maintainer identity (docs/PLAN.md A11). Never a personal address.
+	# Maintainer identity (docs/PLAN.md A11).
 	# (The pattern lives in a variable: written inline, glibc would read \< and
 	# \> as word boundaries rather than literal angle brackets.)
 	local maintainer_re='^[^<>]+ <[^<>[:space:]@]+@[^<>[:space:]]+>$'
 	[[ "$NIMBUS_MAINTAINER" =~ $maintainer_re ]] \
 		|| die "NIMBUS_MAINTAINER must look like 'Full Name <address>', got: $NIMBUS_MAINTAINER"
-	if [[ "$NIMBUS_MAINTAINER" == *"<ID+"* ]]; then
-		warn "NIMBUS_MAINTAINER still contains the literal 'ID+'. Put your numeric GitHub ID in build/nimbus.conf (release.yml refuses to publish until you do)."
-	fi
 
 	# Keys.
 	nimbus_check_docker_key
@@ -292,8 +295,9 @@ main() {
 	version="$(nimbus_check_deb_set "$opt_out")"
 	[[ "$version" == "$NIMBUS_VERSION" ]] || die "Built packages have version $version, expected $NIMBUS_VERSION."
 	if [[ -z "$NIMBUS_TEST_KEY" ]]; then
-		nimbus_check_keyring_deb "$(find "$opt_out" -maxdepth 1 -name 'nimbusos-archive-keyring_*.deb' -print -quit)"
+		nimbus_check_archive_keyring_deb "$(find "$opt_out" -maxdepth 1 -name 'nimbusos-archive-keyring_*.deb' -print -quit)"
 	fi
+	nimbus_check_docker_keyring_deb "$(find "$opt_out" -maxdepth 1 -name 'nimbusos-docker-keyring_*.deb' -print -quit)"
 
 	if [[ -n "$opt_lintian" ]]; then
 		step "lintian"

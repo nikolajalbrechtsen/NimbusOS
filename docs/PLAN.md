@@ -38,19 +38,20 @@ NimbusOS/
 │       │   ├── 10-base.list.chroot
 │       │   ├── 20-plasma.list.chroot
 │       │   ├── 30-theming-fonts.list.chroot
-│       │   ├── 40-calamares.list.chroot             marked "live-only": not mirrored into nimbusos-desktop
+│       │   ├── 40-calamares.list.chroot             marked exclude-from-desktop-depends (NOTE-48)
 │       │   ├── 50-docker.list.chroot
 │       │   ├── 60-virtualization.list.chroot
 │       │   ├── 70-storage-nas.list.chroot
-│       │   ├── 90-nimbusos.list.chroot              nimbusos-desktop itself (marked "live-only")
-│       │   └── 95-installer-pool.list.binary        GRUB/shim packages placed in the ISO pool for Calamares
+│       │   ├── 90-nimbusos.list.chroot              nimbusos-desktop itself (marked exclude-from-desktop-depends)
+│       │   ├── 95-installer-pool-bios.list.binary   grub-pc → ISO pool for Calamares' bootloader step
+│       │   ├── 96-installer-pool-uefi.list.binary   grub-efi + signed GRUB/shim → ISO pool
+│       │   └── 97-installer-pool-luks.list.binary   cryptsetup-initramfs, keyutils → ISO pool (encrypted installs)
 │       ├── archives/                                Docker CE source (NOTE-03, NOTE-05)
 │       │   ├── docker.list.chroot                   build-time source, trusted through docker.key.chroot
 │       │   ├── docker.key.chroot                    Docker's public key; fingerprint checked by build.sh and CI
 │       │   └── docker.list.binary                   the image's source: signed-by=/usr/share/keyrings/docker-archive-keyring.gpg
 │       ├── hooks/live/
 │       │   ├── 0100-flathub-preseed.hook.chroot     runs the packaged Flathub setup once at build time
-│       │   ├── 0150-remove-build-keys.hook.chroot   removes the build-only Docker key from trusted.gpg.d
 │       │   ├── 0200-live-installer-launcher.hook.chroot  hides Debian's "Install Debian" entry in the live image
 │       │   ├── 0300-live-units.hook.chroot          enables the live-only units below
 │       │   ├── 0900-verify-image.hook.chroot        fails the build if groups/services/os-release are wrong
@@ -64,12 +65,14 @@ NimbusOS/
 │       │   ├── etc/xdg/autostart/nimbus-live-session.desktop
 │       │   ├── usr/lib/nimbusos-live/{sources-final,target-cleanup,live-session-setup}
 │       │   └── usr/share/applications/nimbus-install.desktop   "Install NimbusOS"
-│       └── bootloaders/                  overlays merged onto live-build's own templates at build time
-│           ├── grub-pc/                  GRUB (EFI) live menu: labels + theme.cfg; the theme comes from nimbusos-branding
-│           └── isolinux/                 ISOLINUX menu: stdmenu.cfg, labels, splash.svg (rendered to PNG at build)
+│       └── bootloaders/                  overlays; live-build copies them over its own templates itself
+│           ├── splash.svg                one splash for both menus, rendered by live-build in the chroot (NOTE-12)
+│           ├── grub-pc/                  GRUB (EFI) live menu: labels + theme.cfg; live-theme/ is filled from nimbusos-branding
+│           └── isolinux/                 ISOLINUX menu: stdmenu.cfg, labels
 │
 ├── packages/                         one Debian source package per directory: debhelper-compat (= 13), 3.0 (native)
-│   ├── nimbusos-archive-keyring/     keys/*.asc → dearmored keyrings
+│   ├── nimbusos-archive-keyring/     keys/*.asc → dearmored NimbusOS keyring
+│   ├── nimbusos-docker-keyring/      Docker's key → /usr/share/keyrings/docker-archive-keyring.gpg (NOTE-05)
 │   ├── nimbusos-release/             os-release.in, apt/*, nimbus-update (CLI + man page), systemd/*
 │   ├── nimbusos-branding/            art/*.svg, grub/, plymouth/, sddm/, calamares/, plasma/, xdg/, Makefile
 │   ├── nimbus-control/               debian/ only; payload staged from control-center/ at build time
@@ -101,19 +104,21 @@ NimbusOS/
 │        portainer, uptime-kuma, vaultwarden, nextcloud-aio, jellyfin,
 │        pihole, syncthing, home-assistant, grafana, nginx-proxy-manager
 │
-├── apt/conf/{distributions,options}  reprepro config: stable + beta, Limit 3, ValidFor 14d
+├── apt/                              repository config for gh-pages: stable + beta, last 3 versions, Valid-Until 14 d (NOTE-52)
 │
 ├── tools/
-│   ├── build-debs.sh                 stage + build all 6 .debs (used by build.sh, ci.yml, release.yml)
+│   ├── build-debs.sh                 stage + build all 7 .debs (used by build.sh, ci.yml, release.yml)
 │   ├── deb-version.sh                git tag → Debian version (NOTE-32)
 │   ├── gen-desktop-depends.sh        package lists → ${nimbus:ListDepends} substvar (NOTE-48)
 │   ├── verify-trixie.sh              proves every listed package and live-build flag exists in trixie (§7)
+│   ├── dev-shell.sh                  throwaway debian:trixie container (Docker or Podman) with the repo at /src
 │   ├── fetch-docker-key.sh           re-downloads Docker's key and refuses it unless the fingerprint matches
 │   ├── pin-actions.sh                resolves each action's release tag to its commit SHA (NOTE-42)
-│   ├── publish-apt.sh                reprepro include/export + releases.json + signing (release + refresh)
+│   ├── publish-apt.sh                add packages, prune to 3 versions, index, releases.json, sign (release + refresh)
 │   ├── releases-json.py              maintains apt/releases.json
 │   ├── split-iso.sh                  splits ISOs over the GitHub asset limit; writes join instructions
-│   └── qemu-test.sh                  the UEFI/BIOS QEMU test commands from docs/TESTING.md
+│   ├── qemu-test.sh                  the UEFI/BIOS QEMU test commands from docs/TESTING.md
+│   └── tests/deb-version.test.sh     version-mapping regression test (real dpkg; 40 checks)
 │
 └── docs/
     ├── PLAN.md                       this file
@@ -125,7 +130,7 @@ NimbusOS/
 
 Rules for the whole tree:
 
-- **`build/config/` is a template.** `build.sh` copies it to `build/work/config/`, adds the generated pieces there (the built `.deb` files, merged bootloader templates, rendered splash images), and runs live-build inside `build/work/`. A build never modifies the checked-in tree.
+- **`build/config/` is a template.** `build.sh` copies it to `build/work/config/`, adds the generated pieces there (filled-in `@NIMBUS_*@` tokens, the built `.deb` files, the GRUB theme), and runs live-build inside `build/work/`. A build never modifies the checked-in tree.
 - **Anything that may change after install ships in a package.** `includes.chroot_after_packages/` holds only files used by the live session (Calamares configuration, live-only units and launchers). Calamares' last step deletes those files from the installed target.
 - **No binary files are committed.** PNGs, GRUB `.pf2` fonts and binary keyrings are generated when the packages are built (NOTE-12).
 
@@ -147,12 +152,12 @@ git tag -a v0.2.0  ──►  release.yml   (concurrency group "nimbusos-publish
 
 1. Checks that it runs as root on Debian 13 (amd64) with enough free disk space. Installs `live-build`, `debootstrap`, `devscripts` and the other host tools if any are missing.
 2. Checks Docker's key fingerprint, and checks that the NimbusOS APT repository answers with a correctly signed, unexpired `dists/stable/InRelease` (NOTE-04). If it doesn't, the build stops before any long-running step.
-3. Gets the `.deb` files: builds them with `tools/build-debs.sh`, takes them from `--debs-dir` (CI), or with `--from-repo` downloads them with `apt-get download` through a temporary APT configuration that uses `Signed-By` with the NimbusOS key. It then checks that all six are present, share one version, and carry the committed archive key and Docker's key. They go into `build/work/config/packages.chroot/`.
-4. Prepares `build/work/`: copies `build/config/`, fills in `@NIMBUS_*@` tokens from `nimbus.conf`, merges the bootloader overlays onto live-build's own templates, extracts the GRUB theme from the `nimbusos-branding` package (so live and installed boot share one theme), and renders the splash SVGs.
+3. Gets the `.deb` files: builds them with `tools/build-debs.sh`, takes them from `--debs-dir` (CI), or with `--from-repo` downloads them with `apt-get download` through a temporary APT configuration that uses `Signed-By` with the NimbusOS key. It then checks that all seven are present, share one version, and carry the committed archive key and Docker's key. They go into `build/work/config/packages.chroot/`.
+4. Prepares `build/work/`: copies `build/config/`, fills in `@NIMBUS_*@` tokens from `nimbus.conf`, and extracts the GRUB theme from the `nimbusos-branding` package, so live and installed boot share one theme. live-build itself copies the bootloader overlays over its own templates and renders `config/bootloaders/splash.svg` (verified in live-build 1:20250505).
 5. Runs `lb clean`, `lb config` (every flag explained in `build/lib/common.sh`, where `tools/verify-trixie.sh` reuses the same list) and one `lb build`, with `SOURCE_DATE_EPOCH` set from the git commit.
-6. Renames the output to `nimbusos-amd64.iso`, writes `nimbusos-amd64.iso.sha256`, and says whether the ISO is over GitHub's 2 GiB asset limit (release.yml then splits it, NOTE-41).
+6. Checks the finished image's APT setup by reading `filesystem.squashfs` with `unsquashfs`. The image must contain `/etc/apt/sources.list.d/docker.list` from `docker.list.binary`, with every line `signed-by=/usr/share/keyrings/docker-archive-keyring.gpg`. It must contain no trace of `docker.list.chroot`, no second Docker source, no Docker key in `trusted.gpg.d`, and the packaged keyring must hold exactly Docker's key. Then it renames the output to `nimbusos-amd64.iso`, writes `nimbusos-amd64.iso.sha256`, and says whether the ISO is over GitHub's 2 GiB asset limit (release.yml then splits it, NOTE-41).
 
-**Version mapping** (one version for all six packages, taken from git):
+**Version mapping** (one version for all seven packages, taken from git; tested by `tools/tests/deb-version.test.sh` with real `dpkg`):
 
 | Git ref | Debian version | APT suite | `NIMBUSOS_CHANNEL` in os-release |
 |---|---|---|---|
@@ -168,12 +173,13 @@ git tag -a v0.2.0  ──►  release.yml   (concurrency group "nimbusos-publish
 
 | Package | Ships | Key relationships | Maintainer-script duties |
 |---|---|---|---|
-| `nimbusos-archive-keyring` | `/usr/share/keyrings/nimbusos-archive-keyring.gpg` (every `keys/*.asc`, so it can hold old + new keys during rotation); `/usr/share/keyrings/docker-archive-keyring.gpg` (Docker's key, NOTE-05) | none | none |
+| `nimbusos-archive-keyring` | `/usr/share/keyrings/nimbusos-archive-keyring.gpg` (every `keys/*.asc`, so it can hold old + new keys during rotation) | none | none |
+| `nimbusos-docker-keyring` | `/usr/share/keyrings/docker-archive-keyring.gpg`: Docker's key, the `Signed-By` of the image's `docker.list` (NOTE-05) | none | none |
 | `nimbusos-release` | `/usr/lib/os-release` (diverted, NOTE-36); `/etc/apt/sources.list.d/nimbusos.sources` (deb822, `Signed-By`); `/etc/apt/preferences.d/nimbusos.pref` + `nimbusos-docker.pref`; `/etc/apt/apt.conf.d/21nimbusos-periodic` + `52nimbusos-unattended-upgrades`; `/usr/bin/nimbus-update` + man page; `nimbus-update-check.timer`, `nimbus-update-auto.timer`, `nimbus-flathub-setup.service` | Depends: `nimbusos-archive-keyring (>= ver)`, `python3`, `python3-apt`, `unattended-upgrades`, `gpgv` | preinst: `dpkg-divert --rename` of base-files' os-release. postinst: create `/etc/nimbusos/update.conf` if missing; recreate the beta source if Beta is selected. postrm: remove the diversion; on purge, remove the generated files |
 | `nimbusos-branding` | GRUB theme + `/etc/default/grub.d/10-nimbusos.cfg`, Plymouth theme, SDDM theme + `/etc/sddm.conf.d/10-nimbusos.conf`, Calamares branding, wallpaper, Plasma global theme `org.nimbusos.desktop` (with `layout.js`), `NimbusDark.colors`, `/etc/xdg` defaults, logo icons | Depends: `papirus-icon-theme`, `fonts-inter`, `fonts-jetbrains-mono`, `plymouth`, `plymouth-label` | postinst: register `default.plymouth` alternative; `update-grub` if GRUB is installed; initramfs trigger |
-| `nimbus-control` | backend, frontend, `nimbus-privd`, units, Samba drop-in, polkit action, launcher | Depends: the Python stack (`python3-fastapi`, `python3-uvicorn`, `python3-websockets`, `python3-docker`, `python3-libvirt`, `python3-psutil`, `python3-jinja2`, `python3-yaml`, `python3-jsonschema`, `python3-systemd`), `fonts-inter`, `fonts-jetbrains-mono` (served to the UI from their own paths, so the OFL license stays with Debian's packages), `docker-ce`, `docker-compose-plugin`, `libvirt-daemon-system`, `samba`, `wsdd`, `avahi-daemon`, `mergerfs`, `novnc`, `websockify`, `chromium`, …; Recommends: `snapraid` (NOTE-26) | Creates the groups `nimbus-control` and `nimbus-smb`, the system users `nimbus-control` and `nimbus-guest` (NOTE-25), and adds `nimbus-control` to `docker`, `libvirt` and `nimbus-smb`. Runs schema migrations step by step. Adds the smb.conf include (NOTE-23) and the `adduser.conf` keys (NOTE-09). Enables services on first install only. Restarts its own services only when their files changed |
+| `nimbus-control` | backend, frontend, `nimbus-privd`, units, Samba drop-in, polkit action, launcher | Depends: the Python stack (`python3-fastapi`, `python3-uvicorn`, `python3-websockets`, `python3-docker`, `python3-libvirt`, `python3-psutil`, `python3-jinja2`, `python3-yaml`, `python3-jsonschema`, `python3-systemd`), `fonts-inter`, `fonts-jetbrains-mono` (served to the UI from their own paths, so the OFL license stays with Debian's packages), `docker-ce`, `docker-compose-plugin`, `libvirt-daemon-system`, `samba`, `wsdd2`, `avahi-daemon`, `mergerfs`, `novnc`, `websockify`, `chromium`, …; Recommends: `snapraid` (NOTE-26) | Creates the groups `nimbus-control` and `nimbus-smb`, the system users `nimbus-control` and `nimbus-guest` (NOTE-25), and adds `nimbus-control` to `docker`, `libvirt` and `nimbus-smb`. Runs schema migrations step by step. Adds the smb.conf include (NOTE-23) and the `adduser.conf` keys (NOTE-09). Enables services on first install only. Restarts its own services only when their files changed |
 | `nimbus-catalog` | `/usr/share/nimbus-control/catalog/<app-id>/` | Enhances: `nimbus-control` | none. The backend notices catalog changes on its own and marks installed stacks with "Template update available" |
-| `nimbusos-desktop` | nothing but docs | Depends: `${nimbus:ListDepends}` (generated) + the five packages above at `(>= ver)` | none |
+| `nimbusos-desktop` | nothing but docs | Depends: `${nimbus:ListDepends}` (generated; 103 packages as of deliverable 3) + the six packages above at `(>= ver)` | none |
 
 Rules applied to all six: lintian-clean or a justified override; idempotent, upgrade-safe maintainer scripts; user-editable files are conffiles or `.d` drop-ins; services restarted with `deb-systemd-invoke` only when their files changed (`dh_installsystemd --no-restart-after-upgrade` plus a checksum comparison in postinst).
 
@@ -193,7 +199,7 @@ Rules applied to all six: lintian-clean or a justified override; idempotent, upg
 | `nimbus-recycle-clean.timer` | root | — | empties `.recycle/` past each share's retention |
 | `nimbus-netfix.service` | root | — | keeps libvirt guests forwarding while Docker is running (NOTE-19) |
 | `nimbus-update-check.timer`, `nimbus-update-auto.timer` | root | — | NimbusOS update policy (NOTE-34) |
-| `smbd`, `wsdd`, `avahi-daemon` | Debian defaults | 445, 3702/5357, 5353 | NAS; `nmbd` off by default |
+| `smbd`, `wsdd2`, `avahi-daemon` | Debian defaults | 445, 3702 (WS-Discovery), 5353 (mDNS) | NAS; `nmbd` off by default (NOTE-51) |
 
 ### 4.2 Paths and state
 
@@ -256,14 +262,14 @@ Rules applied to all six: lintian-clean or a justified override; idempotent, upg
 | A1 | The GitHub repository stays public, Pages is served from the `gh-pages` branch root, and the URLs in the header table are final. Both URLs are in `build/nimbus.conf`. |
 | A2 | Builds run on a Debian 13 host or a privileged `debian:trixie` container with network access and at least 40 GB free. GitHub runners need their preinstalled toolchains removed first to make room (done in `release.yml`). |
 | A3 | Docker publishes `docker-ce`, `docker-ce-cli`, `containerd.io` and `docker-compose-plugin` for `https://download.docker.com/linux/debian trixie stable`, signed by the key with fingerprint `9DC8 5822 9FC7 DD38 854A E2D8 8D81 803C 0EBF CD88`. |
-| A4 | Trixie ships `live-build` with the `config/includes.chroot_after_packages/` layout, `config/archives/*.{list,key}.{chroot,binary}` handling and the `grub-pc` / `isolinux` bootloader template directories, and Calamares 3.3 with `calamares-settings-debian` providing the `bootloader-config` and `sources-media` steps. The `config/archives` key handling is checked against live-build's source in deliverable 4. |
-| A5 | Trixie's `reprepro` supports `Limit:` (keep several versions per package) and `ValidFor:` (adds `Valid-Until`). |
+| A4 | **Confirmed** (live-build `1:20250505+deb13u1`, Calamares 3.3.14, `calamares-settings-debian` 13.0.13; §7). live-build supports `config/includes.chroot_after_packages/`, `config/archives/*.{list,key}.{chroot,binary}` and the `grub-pc` / `isolinux` / `syslinux_common` overlays. Debian's settings provide the `bootloader-config` and `sources-media` steps. |
+| A5 | **Wrong.** Trixie's `reprepro` is 5.3.1 (`5.4.6+really5.3.2`), which has `ValidFor:` but no `Limit:`. See NOTE-52. |
 | A6 | Debian's signed GRUB finds the `grub.cfg` that sits next to it whatever the EFI directory is called (checked by smoke test 1; fallback in NOTE-07). |
 | A7 | The UI is English-only; the live session uses `en_US.UTF-8` and a `us` keyboard (both tunable in `nimbus.conf`); Calamares lets the user change both. |
 | A8 | Minimum hardware: x86-64-v1 CPU with VT-x/AMD-V for the VM tab, 4 GB RAM, a 40 GB system disk. |
 | A9 | Default hostname `nimbusos`; connection strings and dashboard links use the machine's actual hostname, so a renamed machine still gets correct links. |
 | A10 | The maintainer generates the archive signing key offline as described in `docs/SIGNING.md` and commits only the public key (NOTE-44). |
-| A11 | Every package's Maintainer comes from `NIMBUS_MAINTAINER` in `nimbus.conf`: `Nikolaj Albrechtsen <ID+nikolajalbrechtsen@users.noreply.github.com>`, where you replace `ID` with your numeric GitHub ID. No personal e-mail address appears in any file. `tools/build-debs.sh` warns while the literal `ID+` is still there, and `release.yml` refuses to publish with it. |
+| A11 | Every package's Maintainer comes from `NIMBUS_MAINTAINER` in `build/nimbus.conf`, the only file that contains the maintainer's address. It reaches `debian/control` and the changelog trailers from there. Commit trailers, code comments, docs and test data never contain it; tests use `test@example.invalid`. |
 | A12 | Licensing: GPL-3.0-or-later for code and packaging, CC-BY-SA-4.0 for artwork (wallpaper, themes), machine-readable DEP-5 `debian/copyright`. The Inter and JetBrains Mono font files are never copied into the repo; they stay in Debian's packages under their OFL license. |
 
 ---
@@ -276,15 +282,18 @@ Rules applied to all six: lintian-clean or a justified override; idempotent, upg
 
 **NOTE-02 — `includes.chroot` folder name.** Current live-build reads live-only files from `config/includes.chroot_after_packages/` (copied after package installation, overriding packaged files inside the live image). NimbusOS uses that name instead of the older `config/includes.chroot/`.
 
-**NOTE-03 — One Docker source, no conflicting `Signed-By` (revised after review: single `lb build`).** apt aborts when two entries for the same repository carry different `Signed-By` values. To make that impossible, no package ships a Docker source, so there is only ever one entry, and it comes from live-build's `config/archives/`:
-- During the build, `docker.list.chroot` is trusted through `docker.key.chroot` (live-build's documented mechanism for extra archives). Hook `0150` removes that build-only key from the image's trusted keys before the image's own APT sources are put in place.
-- In the image, `docker.list.binary` is the final source, with `signed-by=/usr/share/keyrings/docker-archive-keyring.gpg`. That keyring is shipped by `nimbusos-archive-keyring`, so Docker key rotations still arrive as NimbusOS updates.
+**NOTE-03 — One Docker source, no conflicting `Signed-By` (single `lb build`; verified against live-build's code).** apt aborts when two entries for the same repository carry different `Signed-By` values. To make that impossible, no package ships a Docker source, so there is only ever one entry, and it comes from live-build's `config/archives/`.
 
-The trade-off: the source line itself (Docker's URL) can't be changed by a package update, which matters only if Docker ever moves its repository. The other option, the same `Signed-By` in `config/archives` and in a packaged source, needs the keyring file at its path before `lb chroot` first runs `apt-get update`. That only works if live-build can place a key at a path we choose, which deliverable 4 checks against live-build's source. If it can, I'll switch and document it there. `build.sh` runs `lb clean`, `lb config` and one `lb build`. No stage is run by hand.
+What live-build `1:20250505+deb13u1` does (its `chroot_archives` script, read in deliverable 3):
+- **Build time:** it writes `docker.list.chroot` as `sources.list.d/docker.list` and copies `docker.key.chroot` to `trusted.gpg.d/docker.key.chroot.asc`.
+- **End of the chroot stage:** it deletes both of those itself, then writes `docker.list.binary` as `sources.list.d/docker.list`.
+- **Image:** the final source names `signed-by=/usr/share/keyrings/docker-archive-keyring.gpg`, which the `nimbusos-docker-keyring` package ships, so Docker key rotations still arrive as NimbusOS updates.
+
+Because live-build only places keys at that fixed `trusted.gpg.d/<name>.asc` path, the other option (the same `Signed-By` path in a packaged source) can't work without running stages by hand, so it is ruled out. The planned cleanup hook `0150` is not needed. `build.sh` instead checks the finished image (§2, step 6): `docker.list` must come from `docker.list.binary` and carry `Signed-By` on every line, there must be no `docker.list.chroot`, and no build-only or globally trusted Docker key. The trade-off: the source line itself (Docker's URL) can't be changed by a package update, which matters only if Docker ever moves its repository. `build.sh` runs `lb clean`, `lb config` and one `lb build`.
 
 **NOTE-04 — The first ISO build needs a published APT repository.** When live-build switches the image to its final APT sources at the end of the chroot stage, it refreshes the indices. `nimbusos-release` is installed by then, so the NimbusOS URL has to serve a signed repository; an empty one is enough. Before building, `build.sh` downloads `dists/stable/InRelease`, verifies it with `gpgv` against the committed archive key, and checks `Valid-Until`. On any failure it stops with a plain message, for example "The NimbusOS APT repository does not answer … run the refresh workflow once (Actions → refresh → Run workflow), then build again." `release.yml` publishes to APT before it builds the ISO. For the very first setup, `refresh.yml` creates an empty signed repository when `gh-pages` doesn't exist yet (`docs/RELEASING.md`, one-time setup).
 
-**NOTE-05 — Docker's key and pinning come from NimbusOS packages.** Docker's key ships as `/usr/share/keyrings/docker-archive-keyring.gpg` in `nimbusos-archive-keyring`. Its fingerprint, `9DC8 5822 9FC7 DD38 854A E2D8 8D81 803C 0EBF CD88`, is written in comments and checked by `build.sh`, `tools/build-debs.sh` and CI. `nimbusos-release` ships `nimbusos-docker.pref`, which pins the Docker origin the same way as NimbusOS's: priority 1 for everything, 500 for `docker-ce`, `docker-ce-cli`, `containerd.io`, `docker-compose-plugin`, `docker-buildx-plugin` and `docker-ce-rootless-extras`. Docker's repository therefore cannot replace Debian packages.
+**NOTE-05 — Docker's key and pinning come from NimbusOS packages.** Docker's key ships as `/usr/share/keyrings/docker-archive-keyring.gpg` in its own package, `nimbusos-docker-keyring`, which `nimbusos-desktop` depends on. Its fingerprint, `9DC8 5822 9FC7 DD38 854A E2D8 8D81 803C 0EBF CD88`, is written in comments and checked by `build.sh`, `tools/build-debs.sh` and CI. `nimbusos-release` ships `nimbusos-docker.pref`, which pins the Docker origin the same way as NimbusOS's: priority 1 for everything, 500 for `docker-ce`, `docker-ce-cli`, `containerd.io`, `docker-compose-plugin`, `docker-buildx-plugin` and `docker-ce-rootless-extras`. Docker's repository therefore cannot replace Debian packages.
 
 **NOTE-06 — Calamares configuration is live-only.** Calamares runs only in the live session, and its own `packages` step purges it from the installed system. `settings.conf` and the module overrides therefore live in `includes.chroot_after_packages/`, where they replace `calamares-settings-debian`'s copies inside the live image. The branding component `/usr/share/calamares/branding/nimbusos/` ships in `nimbusos-branding`, as specified. Debian's `bootloader-config` and `sources-media` steps are kept. Debian's `sources-final` is replaced by `nimbus-sources-final`, which writes deb822 `/etc/apt/sources.list.d/debian.sources` with `main contrib non-free non-free-firmware` for `trixie`, `trixie-updates` and `trixie-security`, and empties the legacy `sources.list`. The NimbusOS and Docker sources are already on the target, because `nimbusos-release` is part of the copied image. A final `nimbus-target-cleanup` step deletes the live-only files from the target. `users.conf` uses the Calamares 3.3 `hostname:` block with `template: "nimbusos"`.
 
@@ -298,7 +307,10 @@ The trade-off: the source line itself (Docker's URL) can't be changed by a packa
 
 **NOTE-11 — Flathub.** The `.flatpakrepo` file carries Flathub's signing key. It is downloaded over HTTPS, which is Flathub's documented method. Writing that key into this repo from memory would be inventing it. `nimbus-flathub-setup.service` (in `nimbusos-release`) therefore runs `flatpak remote-add --if-not-exists --system flathub https://dl.flathub.org/repo/flathub.flatpakrepo` once after the network is up, and the build hook `0100` runs the same packaged script, so the ISO already contains Flathub. Systems that get NimbusOS through an update receive it at their next boot with a network connection.
 
-**NOTE-12 — No binary assets.** All artwork is SVG. GRUB, Plymouth, ISOLINUX, SDDM and Calamares need PNG files, so `nimbusos-branding` renders them during the package build (`rsvg-convert` from `librsvg2-bin`), and GRUB fonts are generated with `grub-mkfont` from `fonts-inter`. The Plasma wallpaper package ships the SVG directly.
+**NOTE-12 — No binary assets.** All artwork is SVG.
+- **GRUB, Plymouth, SDDM, Calamares:** they need PNG files, so `nimbusos-branding` renders them during the package build (`rsvg-convert` from `librsvg2-bin`). GRUB fonts are generated with `grub-mkfont` from `fonts-inter`.
+- **Live boot splash:** `build/config/bootloaders/splash.svg` is rendered by live-build itself inside the chroot (640×480 for ISOLINUX, 800×600 for GRUB), so the build host needs no SVG tools. Note that live-build fills its own `@PROJECT@` token with "Debian GNU/Linux", so the NimbusOS SVG doesn't use it.
+- **Plasma wallpaper:** the package ships the SVG directly.
 
 **NOTE-13 — Web UI fonts come from Debian packages.** The UI uses Inter and JetBrains Mono from `fonts-inter` and `fonts-jetbrains-mono`, which are Depends of `nimbus-control`. The backend serves the font files straight from those packages' paths under `/usr/share/fonts/` at `/assets/fonts/*`, finding them at startup in the packages' file lists so a path change in a Debian update doesn't break it. The fonts are local and work offline with no CDN. No font file is copied into the repo, so the OFL licensing stays with Debian.
 
@@ -332,7 +344,7 @@ The trade-off: the source line itself (Docker's URL) can't be changed by a packa
 
 **NOTE-25 — A dedicated guest account.** Public shares should be writable by guests without world-writable folders. The package therefore creates a `nimbus-guest` system user (nologin, no home, member of `nimbus-smb`) and sets it as Samba's `guest account`. `map to guest = Bad User` is set only while at least one Public share exists.
 
-**NOTE-26 — SnapRAID.** `/etc/snapraid.conf` may belong to Debian's snapraid package, so NimbusOS writes `/etc/nimbus/snapraid.conf` and always calls `snapraid -c`. Parity is **scheduled, not real time**: nightly sync, and a weekly scrub of 8 % of the array covering blocks older than 10 days. The pool card and the wizard both say so. privd refreshes SMART data hourly with `smartctl -n standby`, so spun-down disks are not woken. Availability: see §7. If `snapraid` turns out to be missing from Trixie, the fallback is to build it from the upstream source as an extra package in the NimbusOS APT repository, with priority 500. `nimbus-control` only Recommends `snapraid`. Whenever `/usr/bin/snapraid` is missing, the backend reports no parity support, and the NAS wizard and pool settings hide "Pooled + parity" instead of offering it and then failing.
+**NOTE-26 — SnapRAID.** `/etc/snapraid.conf` may belong to Debian's snapraid package, so NimbusOS writes `/etc/nimbus/snapraid.conf` and always calls `snapraid -c`. Parity is **scheduled, not real time**: nightly sync, and a weekly scrub of 8 % of the array covering blocks older than 10 days. The pool card and the wizard both say so. privd refreshes SMART data hourly with `smartctl -n standby`, so spun-down disks are not woken. Availability: confirmed. `snapraid` 12.4-1 is in Trixie main (§7), so the planned fallback package is not needed. `nimbus-control` still only Recommends `snapraid`. Whenever `/usr/bin/snapraid` is missing, the backend reports no parity support, and the NAS wizard and pool settings hide "Pooled + parity" instead of offering it and then failing.
 
 **NOTE-27 — The ISO library when an `isos` share exists.** The VM tab always uses `/var/lib/nimbus-vms/isos`. When an `isos` share exists, privd bind-mounts the share's folder onto that path, through a managed fstab line. `nimbus-control` then keeps one narrow `ReadWritePaths=` entry, and ISOs dropped in over SMB show up in the VM wizard.
 
@@ -362,7 +374,7 @@ The trade-off: the source line itself (Docker's URL) can't be changed by a packa
 
 **NOTE-38 — `releases.json` is signed.** `releases.json` gets a detached signature, `releases.json.sig`, made with the archive key, and `nimbus-update` verifies it with `gpgv` against the NimbusOS keyring before showing any release notes. The notes are therefore as trustworthy as the packages.
 
-**NOTE-39 — Pages is published from a branch.** GitHub Pages serves the `gh-pages` branch, so the workflows need only `contents: write`. `pages: write` and `id-token: write` belong to the artifact-based `deploy-pages` method, which isn't used. Each publish force-pushes `gh-pages` as a single fresh commit, which keeps the repository from growing with every release. reprepro's `db/` is kept in the branch: it is public metadata and contains no secrets.
+**NOTE-39 — Pages is published from a branch.** GitHub Pages serves the `gh-pages` branch, so the workflows need only `contents: write`. `pages: write` and `id-token: write` belong to the artifact-based `deploy-pages` method, which isn't used. Each publish force-pushes `gh-pages` as a single fresh commit, which keeps the repository from growing with every release. The repository's state (the pool with the last 3 versions of each package) lives in the branch itself; it is public and contains no secrets.
 
 **NOTE-40 — Scheduled workflows are paused after 60 days of inactivity.** GitHub disables scheduled workflows in public repositories that see no activity for 60 days. If `refresh.yml` stops, `InRelease` expires 14 days after its last signing, and installed systems show the "expired metadata" error, which explains how to fix it. `docs/RELEASING.md` explains how to re-enable the workflow.
 
@@ -382,28 +394,61 @@ The trade-off: the source line itself (Docker's URL) can't be changed by a packa
 
 **NOTE-47 — Package build layout.** `packages/nimbus-control` and `packages/nimbus-catalog` contain only `debian/`. `tools/build-debs.sh` stages each package into `_build/src/<pkg>-<version>/`, copying `control-center/` or `catalog/` alongside, and builds there. The source trees stay where the spec puts them, and each package still builds from a self-contained directory.
 
-**NOTE-48 — Which lists feed `nimbusos-desktop`.** `nimbusos-desktop` gets its Depends from the package lists at build time, through a substvar, so the lists and the metapackage can't drift apart. Lists whose header contains `#! nimbus: live-only` are skipped: Calamares, which removes itself after install (if the metapackage depended on it, removing Calamares would remove the metapackage), and `90-nimbusos` (the metapackage itself). GRUB packages are kept out too, because the installer chooses between `grub-pc` and `grub-efi-amd64`.
+**NOTE-48 — Which lists feed `nimbusos-desktop`.** `nimbusos-desktop` gets its Depends from the package lists at build time, through a substvar, so the lists and the metapackage can't drift apart. Lists containing the line `#! nimbus: exclude-from-desktop-depends` are skipped: Calamares, which removes itself after install (if the metapackage depended on it, removing Calamares would remove the metapackage), and `90-nimbusos` (the metapackage itself). The `*.list.binary` files are never read: they only fill the ISO's package pool, where GRUB for BIOS and for UEFI sit in separate lists because the two conflict and the installer picks one. A package listed twice is an error. The marker line is an ordinary comment as far as live-build is concerned (NOTE-53).
 
 **NOTE-49 — `nimbus.conf` values reach the packages.** Build tunables that installed systems need (the APT URL, the `releases.json` URL, the Maintainer) are substituted from `build/nimbus.conf` into package templates at build time, so `nimbus.conf` remains the one place to change them.
 
-**NOTE-50 — Developing on Windows.** The repository is edited on Windows with `core.filemode=false`. `.gitattributes` forces LF line endings, and executable bits are recorded explicitly with `git update-index --chmod=+x` for every script, hook and `debian/rules`.
+**NOTE-50 — Developing on Windows.** The repository is edited on Windows with `core.filemode=false`. `.gitattributes` forces LF line endings, and executable bits are recorded explicitly with `git update-index --chmod=+x` for every script, hook and `debian/rules`. Everything that needs Debian runs in `tools/dev-shell.sh`. On this workstation that is Podman inside the WSL distribution `nimbus-build`; any Docker or Podman host works.
+
+### Found by the Trixie archive check (deliverable 3)
+
+**NOTE-51 — `wsdd2` instead of `wsdd`.** Trixie has no `wsdd` package (§7). `wsdd2` (1.8.7, main) serves the same purpose: it makes the machine show up under Network in Windows Explorer through WS-Discovery. The storage list, the `nimbus-control` Depends, the services table, the alert rules and the Settings page all use `wsdd2` and its unit, `wsdd2.service`.
+
+**NOTE-52 — The APT repository can't be built with Trixie's `reprepro`.** Debian rolled `reprepro` back to 5.3.1 (`5.4.6+really5.3.2`). That version has `ValidFor:` but not `Limit:`, so a suite can hold only one version of each package. That breaks "keep the last 3 versions so users can roll back with `apt install <pkg>=<version>`". The closest supported alternative, used in deliverable 10, is `apt-ftparchive` from Debian's `apt-utils`, driven by `tools/publish-apt.sh`:
+- the pool keeps the newest 3 versions of each package per suite, and older ones are pruned;
+- `apt-ftparchive packages` indexes every version in the pool, so all 3 stay installable;
+- `apt-ftparchive release` writes `Release` with Origin, Label, Suite, Codename and `Valid-Until`;
+- `gpg` produces `InRelease` and `Release.gpg`.
+
+`aptly` 1.6.1 is also in Trixie and keeps several versions natively. Its publish command has no `Valid-Until` option, though, which the weekly re-signing relies on. If you'd rather keep `reprepro` and accept "latest version only" for rollbacks, say so before deliverable 10.
+
+**NOTE-53 — Package-list format rules.** live-build passes each list through `printf` as a format string and reads it with `read` (`Expand_packagelist` in live-build 1:20250505). So:
+- a `%` or `\` anywhere in a list, comments included, corrupts it;
+- a line starting with `!` is executed as a shell command;
+- `#if`, `#nif` and `#endif` are conditionals;
+- there are no trailing comments: `pkg # note` would install packages named `#` and `note`.
+
+NimbusOS lists therefore hold one package name per line and plain `# ` comment lines only, and `tools/verify-trixie.sh` and `tools/gen-desktop-depends.sh` reject anything else.
 
 ---
 
 ## 7. Verification status
 
-The online check of package names and flags against the Trixie archive was declined in this session, so nothing in this plan has yet been confirmed against the live archive. The project checks this mechanically instead, so CI fails on any invented name:
+`tools/verify-trixie.sh` checks every package and flag against the real archive. CI runs it on every push (deliverable 10), and anyone can run it through `tools/dev-shell.sh`. It lints the lists against live-build's format rules, gives every listed package a candidate, resolves all chroot lists together with Recommends, resolves each binary list on its own, checks the dependency fields of `packages/*/debian/control`, and runs `lb config` with `build.sh`'s exact flag list, plus a bogus flag as a control. ruff is CI-only and not checked (NOTE-43).
 
-- `tools/verify-trixie.sh` runs in `ci.yml` inside `debian:trixie` with `main contrib non-free non-free-firmware` and the Docker source enabled.
-  1. `apt-get install --simulate` of every package in every list, plus every `Depends:` of the six packages, fails on any package that doesn't exist.
-  2. `lb config` with `build.sh`'s exact flag set in a scratch directory fails on any option the Trixie live-build doesn't know.
-  3. `testparm` and `snapraid`/`mergerfs` option checks run against the generated sample configs from the test suite.
+**Run of 2026-11-17** (deliverable 3): `debian:trixie` container (Debian 13.7) via `tools/dev-shell.sh` on Podman, mirror deb.debian.org, live-build `1:20250505+deb13u1`, with `--skip-docker` because Docker's key arrives in deliverable 4. Result: **PASSED**. 8 chroot lists and 3 binary lists, 109 distinct packages, all present. The chroot lists resolve together to 1,906 packages; the ISO pool lists resolve to 41 (BIOS), 55 (UEFI) and 54 (LUKS) packages. `lb config` accepts all 78 arguments and rejects a bogus one.
 
-| Confidence | Names |
-|---|---|
-| Expected present | `live-build`, `debootstrap`, `calamares`, `calamares-settings-debian`, `kde-plasma-desktop`, `sddm`, `plymouth`, `firefox-esr`, `chromium`, `konsole`, `dolphin`, `plasma-discover`, `flatpak`, `pipewire`, `pipewire-pulse`, `wireplumber`, `network-manager`, `papirus-icon-theme`, `fonts-jetbrains-mono`, `samba`, `smbclient`, `avahi-daemon`, `mergerfs`, `smartmontools`, `parted`, `btrfs-progs`, `xfsprogs`, `e2fsprogs`, `exfatprogs`, `ntfs-3g`, `qemu-system-x86`, `qemu-utils`, `libvirt-daemon-system`, `libvirt-clients`, `virtinst`, `ovmf`, `bridge-utils`, `swtpm`, `swtpm-tools`, `novnc`, `websockify`, `python3-websockify`, `python3-fastapi`, `python3-uvicorn`, `python3-docker`, `python3-libvirt`, `python3-psutil`, `python3-jinja2`, `python3-yaml`, `python3-apt`, `python3-systemd`, `unattended-upgrades`, `reprepro`, `intel-microcode`, `amd64-microcode`, `firmware-linux`, `firmware-misc-nonfree`, `firmware-amd-graphics`, `firmware-iwlwifi`, `firmware-realtek` |
-| Must be confirmed by `verify-trixie.sh` | `snapraid` (fallback in NOTE-26), `wsdd`, `samba-vfs-modules` (Trixie's split of VFS modules between `samba` and this package), `fonts-inter` (vs. `fonts-inter-variable`), `plasma-discover-backend-flatpak`, the PackageKit backend (Debian builds it into `plasma-discover`), `kwin-wayland`/`kwin-x11`, `libvirt-daemon-config-network`, `python3-websockets`, `plymouth-label`, `firmware-sof-signed`; `lb config` flags `--chroot-squashfs-compression-type` and `--uefi-secure-boot` |
-| Fetched, never typed | Docker's ASCII-armored key (fingerprint checked against A3, re-checked in CI) and the action commit SHAs (NOTE-42) |
+| Item | Result | Consequence |
+|---|---|---|
+| `snapraid` | 12.4-1, main | Present; no fallback package needed (NOTE-26) |
+| `wsdd` | **not in Trixie** | Replaced by `wsdd2` 1.8.7+dfsg-1.2, main (NOTE-51) |
+| `samba-vfs-modules` | 2:4.22.11+dfsg-0+deb13u1, main | Present |
+| `fonts-inter` | 4.1+ds-1, main | Present (`fonts-inter-variable` exists too, unused) |
+| `--chroot-squashfs-compression-type` | accepted; stored `LB_CHROOT_SQUASHFS_COMPRESSION_TYPE="xz"` | xz squashfs as specified |
+| `--uefi-secure-boot` | accepted; stored `LB_UEFI_SECURE_BOOT="auto"` | Debian's signed shim/GRUB used when available |
+| `plasma-discover-backend-packagekit` | does not exist | The backend is built into `plasma-discover` (`packagekit-backend.so`), as planned |
+| `reprepro` | `5.4.6+really5.3.2` (reports 5.3.1): no `Limit:` | Assumption A5 was wrong; see NOTE-52 |
+| Docker CE packages | not yet checked | Deliverable 4 (needs Docker's key), then CI on every push |
+| `packages/*/debian/control` | not written yet | Checked automatically once deliverable 5 exists |
+
+Facts confirmed by reading live-build `1:20250505+deb13u1`'s own scripts and Debian's `calamares-settings-debian 13.0.13`:
+- `chroot_archives` copies `*.key.chroot` to `trusted.gpg.d/<name>.asc` and removes both the `.list.chroot` source and that key itself at the end of the chroot stage (NOTE-03).
+- `binary_package-lists` resolves each `.list.binary` separately against an empty dpkg status.
+- `binary_grub_cfg` and `binary_syslinux` copy `config/bootloaders/{grub-pc,isolinux,syslinux_common}` over the built-in templates.
+- `binary_bootloader_splash` renders `config/bootloaders/splash.svg` (640×480 ISOLINUX, 800×600 GRUB).
+- Package lists go through `printf`/`read` (NOTE-53).
+- Debian's `sources-final` writes only `main non-free-firmware` and adds backports (NOTE-06).
+- Debian's `bootloader-config` installs `grub-efi` or `grub-pc`, plus `cryptsetup-initramfs cryptsetup keyutils` for encrypted installs, from the ISO pool.
 
 ---
 
@@ -413,9 +458,9 @@ The online check of package names and flags against the Trixie archive was decli
 |---|---|---|
 | 1 | Plan | `docs/PLAN.md`, `.gitattributes`, `.gitignore` |
 | 2 | Build entry point | `build/nimbus.conf`, `build/build.sh`, `build/lib/common.sh`, `tools/build-debs.sh`, `tools/deb-version.sh` |
-| 3 | Package lists | `build/config/package-lists/*`, `tools/gen-desktop-depends.sh`, `tools/verify-trixie.sh` |
+| 3 | Package lists | `build/config/package-lists/*`, `tools/gen-desktop-depends.sh`, `tools/verify-trixie.sh`, `tools/dev-shell.sh`, `tools/tests/deb-version.test.sh` |
 | 4 | Build-time archives | `build/config/archives/{docker.list.chroot,docker.key.chroot,docker.list.binary}`, `tools/fetch-docker-key.sh` |
-| 5 | Debian packaging (6 packages) | `packages/*/debian/**`; payloads for keyring, release (os-release, sources, pinning with `apt-cache policy` proof, unattended-upgrades drop-in, `nimbus-update`), branding (all themes and art) and the desktop metapackage |
+| 5 | Debian packaging (7 packages) | `packages/*/debian/**`; payloads for both keyrings, release (os-release, sources, pinning with `apt-cache policy` proof, unattended-upgrades drop-in, `nimbus-update`), branding (all themes and art, CC-BY-SA-4.0 text from SPDX) and the desktop metapackage |
 | 6 | Live hooks | `build/config/hooks/live/*.hook.chroot` |
 | 7 | Live-only files and boot menus | `build/config/includes.chroot_after_packages/**`, `build/config/bootloaders/**` |
 | 8 | Nimbus Control Center | `control-center/**` (backend, common, privd, frontend, bin, systemd, data, tests), in several batches |
@@ -427,8 +472,9 @@ The online check of package names and flags against the Trixie archive was decli
 
 ## 9. Decisions from review (2026-11-17)
 
-1. **Maintainer.** `Nikolaj Albrechtsen <ID+nikolajalbrechtsen@users.noreply.github.com>` in `NIMBUS_MAINTAINER`. You replace `ID` with your numeric GitHub ID, and no personal e-mail address goes in any file (A11).
-2. **License.** GPL-3.0-or-later for code and packaging, CC-BY-SA-4.0 for artwork, DEP-5 `debian/copyright`, fonts left in Debian's packages (A12, NOTE-13).
-3. **Network.** Allowed in deliverables 4 and 10. In deliverable 4, Docker's key is committed only after its fingerprint matches, the fingerprint is written into a comment, and CI re-checks it. In deliverable 10, actions are pinned to released-tag SHAs with a tag comment, and Dependabot is set up. Both get re-runnable fetch-and-verify scripts.
+1. **Maintainer.** Your name and address as set in `NIMBUS_MAINTAINER` (`build/nimbus.conf`), the only place it is written. It reaches `debian/control` and the changelog trailers from there, and stays out of commit trailers, code comments, docs and test data (A11). This replaced the earlier no-reply placeholder; the placeholder warning and the planned release-workflow block were removed.
+2. **License.** GPL-3.0-or-later for code and packaging, CC-BY-SA-4.0 for artwork, DEP-5 `debian/copyright`, fonts left in Debian's packages (A12, NOTE-13). The CC-BY-SA-4.0 text comes from SPDX's `license-list-data` (`text/CC-BY-SA-4.0.txt`), pinned to a commit that is noted in `debian/copyright` (deliverable 5).
+3. **Network.** Allowed in deliverables 4 and 10. In deliverable 4, Docker's key is committed only after its fingerprint matches, the fingerprint is written into a comment, and CI re-checks it. In deliverable 10, actions are pinned to released-tag SHAs with a tag comment, and Dependabot is set up. Both get re-runnable fetch-and-verify scripts. `verify-trixie.sh` was also run against deb.debian.org in deliverable 3 (§7).
 4. **Review changes.** NOTE-03 (no hand-run stages; one Docker source), NOTE-04 (repository check in `build.sh`), NOTE-14 (code expires after first use or 30 s), NOTE-23 (ucf CI test), NOTE-26 (hide "Pooled + parity" without snapraid), NOTE-34 (locks, random delay, never reboot), NOTE-35 (journal), NOTE-41 (xz, sums for parts and ISO, PowerShell join), NOTE-43 (ruff on the runner only).
-5. **Open.** The full CC-BY-SA-4.0 license text is needed verbatim in `nimbusos-branding`'s `debian/copyright` (deliverable 5) and in `LICENSES/` (deliverable 10). Debian's `/usr/share/common-licenses` may not include it. I'll ask before fetching it in deliverable 5.
+5. **Docker keyring package.** Docker's key ships in its own package, `nimbusos-docker-keyring`, which `nimbusos-desktop` depends on. That makes seven packages. `build.sh` checks the finished image's APT setup (§2, step 6).
+6. **Test environment.** `tools/dev-shell.sh` runs a `debian:trixie` container with Docker or Podman. The version-mapping tests pass there with real `dpkg` 1.22.22: 40 of 40 checks.
