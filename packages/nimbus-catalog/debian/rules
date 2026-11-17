@@ -1,0 +1,19 @@
+#!/usr/bin/make -f
+# =============================================================================
+# debian/rules for nimbus-catalog
+# =============================================================================
+# What: checks every app in catalog/ (staged by tools/build-debs.sh) with
+#       debian/check-catalog.py before anything is installed: one bad
+#       manifest fails the build. Then installs the apps and the schema into
+#       /usr/share/nimbus-control/catalog/.
+# Why:  the Control Center trusts the catalog's structure and compares each
+#       app's template_version with the version an installed app was
+#       created from (docs/PLAN.md NOTE-60). The package has no maintainer
+#       scripts, so installing or upgrading it can't touch installed apps.
+# =============================================================================
+
+%:
+	dh $@
+
+override_dh_auto_build:
+	python3 debian/check-catalog.py catalog

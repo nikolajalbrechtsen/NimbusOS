@@ -1,0 +1,18 @@
+# =============================================================================
+# nimbus-snapraid-sync.timer: starts the SnapRAID sync every night
+# =============================================================================
+# What: 03:30 local time with up to 30 minutes of random delay; a run missed
+#       while the machine was off happens at the next boot.
+# Why:  docs/PLAN.md NOTE-26. The service itself does nothing until parity is
+#       configured, so the timer can be enabled on every system.
+# =============================================================================
+[Unit]
+Description=Nightly Nimbus SnapRAID parity sync
+
+[Timer]
+OnCalendar=*-*-* 03:30
+RandomizedDelaySec=30min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

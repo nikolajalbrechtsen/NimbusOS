@@ -1,0 +1,25 @@
+# =============================================================================
+# nimbus-privd.service: the privileged helper
+# =============================================================================
+# What: runs privd as root when nimbus-privd.socket gets a connection. privd
+#       carries out the fixed list of verbs (disks, pool, shares, SMB users,
+#       updates) with argument lists, never a shell (docs/PLAN.md NOTE-15).
+#       Its state is /var/lib/nimbus-privd and /var/cache/nimbus-privd
+#       (tmpfiles.d).
+# Why:  docs/PLAN.md §4.1 and §4.3. No [Install]: only the socket is enabled.
+# =============================================================================
+[Unit]
+Description=Nimbus Control Center privileged helper
+Documentation=@NIMBUS_HOME_URL@
+Requires=nimbus-privd.socket
+After=nimbus-privd.socket
+
+[Service]
+Type=exec
+ExecStart=/usr/lib/nimbus-control/privd/nimbus-privd.py
+UMask=0022
+NoNewPrivileges=yes
+PrivateTmp=yes
+LockPersonality=yes
+RestrictRealtime=yes
+SystemCallArchitectures=native

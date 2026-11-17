@@ -1,0 +1,344 @@
+#!/usr/bin/python3
+# =============================================================================
+# nimbus-migrate: bring the Control Center's state files to the current schema
+# =============================================================================
+# What: reads /var/lib/nimbus-control/schema_version and applies the numbered
+#       steps in /usr/lib/nimbus-control/migrations/ one at a time, from the
+#       stored version up to the newest step:
+#         1. takes an exclusive lock (.migrate.lock), so two runs never overlap;
+#         2. copies every state file (the regular files at the top of the
+#            state directory) into backups/schema-<from>-<UTC time>/ first;
+#         3. runs each step and writes schema_version after it, atomically;
+#         4. if a step fails, puts every state file back from that backup,
+#            logs one clear error to the journal (identifier nimbus-migrate)
+#            and exits 1, so nimbus-control does not start on half-migrated
+#            state.
+#       A state newer than the newest step (a downgrade) is refused and left
+#       untouched. A fresh install (empty state directory) starts at schema 0.
+#       Only state files are touched: stacks/ (app data and volumes) is never
+#       read, written or backed up here.
+#
+# Why:  nimbus-control upgrades must never lose or corrupt settings, shares or
+#       stack records (docs/PLAN.md NOTE-59). It runs as ExecStartPre of
+#       nimbus-control.service, as the nimbus-control user, so every start
+#       after an upgrade migrates first.
+#
+# Usage: nimbus-migrate [--state-dir DIR] [--migrations-dir DIR] [--status]
+#   --status          print "<stored> <newest>" and exit 0 (no changes)
+#   --state-dir       default /var/lib/nimbus-control
+#   --migrations-dir  default /usr/lib/nimbus-control/migrations
+# Exit codes: 0 done or nothing to do, 1 a step failed (state restored),
+#             2 usage or setup error, 3 refused (state newer than this version,
+#             or state files without a schema_version).
+# =============================================================================
+
+import argparse
+import datetime
+import fcntl
+import importlib.util
+import os
+import re
+import shutil
+import stat
+import sys
+import traceback
+
+DEFAULT_STATE_DIR = "/var/lib/nimbus-control"
+DEFAULT_MIGRATIONS_DIR = "/usr/lib/nimbus-control/migrations"
+SCHEMA_FILE = "schema_version"
+LOCK_FILE = ".migrate.lock"
+BACKUP_DIR = "backups"
+BACKUPS_KEPT = 5
+STEP_RE = re.compile(r"^(\d{4})_([a-z0-9_]+)\.py$")
+STATE_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_.-]*\.json$")
+IDENTIFIER = "nimbus-migrate"
+
+# syslog priorities
+ERR, WARNING, INFO = 3, 4, 6
+
+
+class MigrationError(Exception):
+    """A setup problem that must stop the run (exit code in .code)."""
+
+    def __init__(self, message, code):
+        super().__init__(message)
+        self.code = code
+
+
+# --- logging -------------------------------------------------------------------
+def _stderr_is_journal():
+    """True when stderr is connected to the journal (systemd sets
+    JOURNAL_STREAM to the device:inode of that stream)."""
+    value = os.environ.get("JOURNAL_STREAM", "")
+    try:
+        dev, ino = (int(x) for x in value.split(":"))
+        st = os.fstat(sys.stderr.fileno())
+    except (ValueError, OSError):
+        return False
+    return st.st_dev == dev and st.st_ino == ino
+
+
+def log(priority, message, **fields):
+    """Log MESSAGE once: as a structured journal entry when the journal is
+    reachable, and on stderr unless stderr already goes to the journal."""
+    sent = False
+    try:
+        from systemd import journal  # python3-systemd, a Depends of nimbus-control
+        journal.send(message, PRIORITY=str(priority), SYSLOG_IDENTIFIER=IDENTIFIER,
+                     **{"NIMBUS_" + k.upper(): str(v) for k, v in fields.items()})
+        sent = True
+    except Exception:  # no python3-systemd, or no journal (image build chroot)
+        sent = False
+    if not (sent and _stderr_is_journal()):
+        prefix = f"<{priority}>" if _stderr_is_journal() else f"{IDENTIFIER}: "
+        print(prefix + message, file=sys.stderr, flush=True)
+
+
+# --- files ---------------------------------------------------------------------
+def _fsync_dir(path):
+    fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
+def write_atomic(path, data):
+    """Write bytes DATA to PATH via a temporary file, fsync and rename."""
+    directory = os.path.dirname(path)
+    tmp = os.path.join(directory, f".{os.path.basename(path)}.tmp")
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o640)
+    try:
+        os.write(fd, data)
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+    os.replace(tmp, path)
+    _fsync_dir(directory)
+
+
+def state_files(state_dir):
+    """The state files: regular files at the top of STATE_DIR, except the lock
+    and temporary files. Directories (stacks/, backups/) are never included."""
+    names = []
+    for entry in os.scandir(state_dir):
+        if entry.name in (LOCK_FILE,) or entry.name.startswith("."):
+            continue
+        if entry.is_file(follow_symlinks=False):
+            names.append(entry.name)
+        elif entry.is_symlink():
+            raise MigrationError(f"{entry.path} is a symbolic link; refusing to migrate.", 2)
+    return sorted(names)
+
+
+def read_schema(state_dir):
+    path = os.path.join(state_dir, SCHEMA_FILE)
+    try:
+        with open(path, encoding="ascii") as f:
+            text = f.read().strip()
+    except FileNotFoundError:
+        if state_files(state_dir):
+            raise MigrationError(
+                f"{state_dir} holds state files but no {SCHEMA_FILE}; refusing to guess their "
+                f"version. Restore {SCHEMA_FILE} from a backup in {state_dir}/{BACKUP_DIR}/.", 3)
+        return 0
+    if not re.fullmatch(r"[0-9]{1,6}", text):
+        raise MigrationError(f"{path} does not hold a version number: {text!r}", 3)
+    return int(text)
+
+
+def write_schema(state_dir, version):
+    write_atomic(os.path.join(state_dir, SCHEMA_FILE), f"{version}\n".encode("ascii"))
+
+
+# --- steps ---------------------------------------------------------------------
+class Step:
+    def __init__(self, version, name, path):
+        self.version, self.name, self.path = version, name, path
+        self.description = name.replace("_", " ")
+        self.migrate = None
+
+    def load(self):
+        spec = importlib.util.spec_from_file_location(f"nimbus_migration_{self.version:04d}", self.path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        if not callable(getattr(module, "migrate", None)):
+            raise MigrationError(f"{self.path} has no migrate(ctx) function.", 2)
+        self.description = str(getattr(module, "DESCRIPTION", self.description))
+        self.migrate = module.migrate
+
+
+def find_steps(migrations_dir):
+    try:
+        names = os.listdir(migrations_dir)
+    except OSError as e:
+        raise MigrationError(f"cannot read {migrations_dir}: {e.strerror}", 2)
+    steps = []
+    for name in sorted(names):
+        m = STEP_RE.match(name)
+        if m:
+            steps.append(Step(int(m.group(1)), m.group(2), os.path.join(migrations_dir, name)))
+    for expected, step in enumerate(steps, start=1):
+        if step.version != expected:
+            raise MigrationError(
+                f"migration steps in {migrations_dir} must be numbered 0001, 0002, ... without "
+                f"gaps; found {os.path.basename(step.path)} where {expected:04d} was expected.", 2)
+    return steps
+
+
+class Context:
+    """What a migration step may use. Steps change state files only through
+    read_json/write_json/remove, which accept plain top-level *.json names."""
+
+    def __init__(self, state_dir, step):
+        self.state_dir = state_dir
+        self._step = step
+
+    def _path(self, name):
+        if not STATE_NAME_RE.fullmatch(name):
+            raise ValueError(f"not a state file name: {name!r}")
+        return os.path.join(self.state_dir, name)
+
+    def exists(self, name):
+        return os.path.lexists(self._path(name))
+
+    def read_json(self, name, default=None):
+        import json
+        try:
+            with open(self._path(name), encoding="utf-8") as f:
+                return json.load(f)
+        except FileNotFoundError:
+            return default
+
+    def write_json(self, name, data):
+        import json
+        text = json.dumps(data, indent=2, sort_keys=True, ensure_ascii=False) + "\n"
+        write_atomic(self._path(name), text.encode("utf-8"))
+
+    def remove(self, name):
+        try:
+            os.unlink(self._path(name))
+        except FileNotFoundError:
+            pass
+
+    def log(self, message):
+        log(INFO, f"step {self._step.version:04d}: {message}", migration=f"{self._step.version:04d}")
+
+
+# --- backup and restore ----------------------------------------------------------
+def make_backup(state_dir, from_version):
+    root = os.path.join(state_dir, BACKUP_DIR)
+    os.makedirs(root, mode=0o750, exist_ok=True)
+    stamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%S.%fZ")
+    backup = os.path.join(root, f"schema-{from_version}-{stamp}")
+    os.mkdir(backup, 0o750)
+    for name in state_files(state_dir):
+        shutil.copy2(os.path.join(state_dir, name), os.path.join(backup, name), follow_symlinks=False)
+        with open(os.path.join(backup, name), "rb") as f:
+            os.fsync(f.fileno())
+    _fsync_dir(backup)
+    _fsync_dir(root)
+    return backup
+
+
+def restore_backup(state_dir, backup):
+    """Make the state files exactly what BACKUP holds."""
+    saved = set(os.listdir(backup))
+    for name in state_files(state_dir):
+        if name not in saved:
+            os.unlink(os.path.join(state_dir, name))
+    for name in sorted(saved):
+        with open(os.path.join(backup, name), "rb") as f:
+            data = f.read()
+        write_atomic(os.path.join(state_dir, name), data)
+        shutil.copystat(os.path.join(backup, name), os.path.join(state_dir, name))
+
+
+def prune_backups(state_dir, keep=BACKUPS_KEPT):
+    root = os.path.join(state_dir, BACKUP_DIR)
+    entries = sorted(e for e in os.listdir(root) if e.startswith("schema-"))
+    # Names sort by schema then time; order by the time part.
+    entries.sort(key=lambda e: e.rsplit("-", 1)[-1])
+    for old in entries[:-keep]:
+        shutil.rmtree(os.path.join(root, old), ignore_errors=True)
+
+
+# --- main ----------------------------------------------------------------------
+def migrate(state_dir, migrations_dir):
+    steps = find_steps(migrations_dir)
+    target = len(steps)
+    current = read_schema(state_dir)
+
+    if current == target:
+        return 0
+    if current > target:
+        raise MigrationError(
+            f"the state in {state_dir} is at schema {current}, newer than this nimbus-control "
+            f"supports ({target}). This happens after a downgrade. Install the newer "
+            f"nimbus-control again, or restore a backup from {state_dir}/{BACKUP_DIR}/.", 3)
+
+    backup = make_backup(state_dir, current)
+    log(INFO, f"migrating the Control Center state in {state_dir} from schema {current} to "
+              f"{target}; backup of the state files: {backup}",
+        schema_from=current, schema_to=target, backup=backup)
+
+    for step in steps[current:]:
+        try:
+            step.load()
+            step.migrate(Context(state_dir, step))
+            write_schema(state_dir, step.version)
+        except Exception as e:  # any failure: restore, report, stop
+            detail = "".join(traceback.format_exception_only(type(e), e)).strip()
+            try:
+                restore_backup(state_dir, backup)
+                restored = f"The state files were restored from {backup} (schema {current})."
+            except Exception as restore_error:
+                restored = (f"Restoring {backup} ALSO failed ({restore_error}); copy its files "
+                            f"back into {state_dir} by hand.")
+            log(ERR,
+                f"state migration {step.version:04d} ({step.description}) failed: {detail}. "
+                f"{restored} nimbus-control will not start until this is fixed. Please report "
+                f"it with the output of: journalctl -t {IDENTIFIER}",
+                schema_from=current, schema_to=target, migration=f"{step.version:04d}",
+                backup=backup, traceback="".join(traceback.format_exc()))
+            return 1
+        log(INFO, f"step {step.version:04d} done: {step.description}", migration=f"{step.version:04d}")
+
+    prune_backups(state_dir)
+    log(INFO, f"the Control Center state is now at schema {target}", schema_from=current, schema_to=target)
+    return 0
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(prog="nimbus-migrate",
+                                     description="Migrate the Nimbus Control Center state files.")
+    parser.add_argument("--state-dir", default=DEFAULT_STATE_DIR)
+    parser.add_argument("--migrations-dir", default=DEFAULT_MIGRATIONS_DIR)
+    parser.add_argument("--status", action="store_true", help="print '<stored> <newest>' and exit")
+    args = parser.parse_args(argv)
+
+    os.umask(0o027)
+    state_dir = os.path.realpath(args.state_dir)
+    try:
+        st = os.stat(state_dir)
+        if not stat.S_ISDIR(st.st_mode):
+            raise MigrationError(f"{state_dir} is not a directory.", 2)
+        if args.status:
+            print(read_schema(state_dir), len(find_steps(args.migrations_dir)))
+            return 0
+        lock_fd = os.open(os.path.join(state_dir, LOCK_FILE), os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o640)
+        try:
+            fcntl.flock(lock_fd, fcntl.LOCK_EX)
+            return migrate(state_dir, args.migrations_dir)
+        finally:
+            os.close(lock_fd)
+    except MigrationError as e:
+        log(ERR, str(e))
+        return e.code
+    except OSError as e:
+        log(ERR, f"{e.filename or state_dir}: {e.strerror}")
+        return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -1,0 +1,26 @@
+Source: nimbus-catalog
+Section: admin
+Priority: optional
+Maintainer: @NIMBUS_MAINTAINER@
+Build-Depends: debhelper-compat (= 13),
+ python3:any,
+ python3-jsonschema
+Standards-Version: 4.7.2
+Rules-Requires-Root: no
+Homepage: @NIMBUS_HOME_URL@
+Vcs-Browser: @NIMBUS_HOME_URL@
+Vcs-Git: @NIMBUS_HOME_URL@.git
+
+Package: nimbus-catalog
+Architecture: all
+Multi-Arch: foreign
+Depends: ${misc:Depends}
+Enhances: nimbus-control
+Description: Nimbus Control Center app catalog
+ The apps the Nimbus Control Center offers for one-click installation:
+ for each app, a manifest (with its own template_version), a Docker
+ Compose template and an icon, in /usr/share/nimbus-control/catalog/.
+ .
+ Updating this package never changes installed apps. When an app's
+ template_version is newer than the one an installed app was created
+ from, the Control Center shows "Template update available" for it.

@@ -1,0 +1,75 @@
+Source: nimbus-control
+Section: admin
+Priority: optional
+Maintainer: @NIMBUS_MAINTAINER@
+Build-Depends: debhelper-compat (= 13),
+ dh-python,
+ python3:any
+Standards-Version: 4.7.2
+Rules-Requires-Root: no
+Homepage: @NIMBUS_HOME_URL@
+Vcs-Browser: @NIMBUS_HOME_URL@
+Vcs-Git: @NIMBUS_HOME_URL@.git
+
+Package: nimbus-control
+Architecture: all
+Depends: ${misc:Depends},
+ ${python3:Depends},
+ python3-fastapi,
+ python3-uvicorn,
+ python3-websockets,
+ python3-multipart,
+ python3-docker,
+ python3-libvirt,
+ python3-psutil,
+ python3-jinja2,
+ python3-yaml,
+ python3-jsonschema,
+ python3-systemd,
+ fonts-inter,
+ fonts-jetbrains-mono,
+ docker-ce,
+ docker-ce-cli,
+ docker-compose-plugin,
+ libvirt-daemon-system,
+ libvirt-daemon-driver-qemu,
+ libvirt-daemon-config-network,
+ libvirt-clients,
+ qemu-system-x86,
+ qemu-utils,
+ ovmf,
+ swtpm-tools,
+ novnc,
+ websockify,
+ samba,
+ samba-common-bin,
+ samba-vfs-modules,
+ smbclient,
+ wsdd2,
+ avahi-daemon,
+ mergerfs,
+ smartmontools,
+ parted,
+ xfsprogs,
+ btrfs-progs,
+ e2fsprogs,
+ iptables,
+ pkexec,
+ chromium
+Recommends: snapraid
+Description: Nimbus Control Center: apps, VMs and storage in one window
+ The local web app of NimbusOS, served on 127.0.0.1:7777 and opened as its
+ own window:
+  - dashboard with live CPU, memory, disk and network use per app and VM,
+    and alerts;
+  - app store: one-click Docker Compose apps from the NimbusOS catalog;
+  - virtual machines on KVM/QEMU with embedded consoles;
+  - storage: disks, a mergerfs pool with optional SnapRAID parity, SMB
+    shares and SMB users;
+  - NimbusOS updates.
+ .
+ The backend runs as the unprivileged nimbus-control user. Privileged work
+ goes through nimbus-privd, a root helper with a fixed list of actions
+ that only nimbus-control may call. Purging this package removes its own
+ settings and caches but never app data, VM disks, shares, SMB users or
+ disk mounts.

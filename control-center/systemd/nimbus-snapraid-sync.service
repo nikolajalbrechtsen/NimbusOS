@@ -1,0 +1,21 @@
+# =============================================================================
+# nimbus-snapraid-sync.service: nightly SnapRAID sync and weekly scrub
+# =============================================================================
+# What: runs nimbus-snapraid-run, which syncs parity with
+#       "snapraid -c /etc/nimbus/snapraid.conf" every night and, once a week,
+#       scrubs 8 % of the array (blocks older than 10 days). Skipped while no
+#       parity is configured or snapraid isn't installed.
+# Why:  docs/PLAN.md NOTE-26: parity is scheduled, not real time.
+# =============================================================================
+[Unit]
+Description=Nimbus SnapRAID parity sync
+Documentation=@NIMBUS_HOME_URL@
+ConditionPathExists=/etc/nimbus/snapraid.conf
+ConditionPathExists=/usr/bin/snapraid
+After=local-fs.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/lib/nimbus-control/bin/nimbus-snapraid-run
+Nice=10
+IOSchedulingClass=idle

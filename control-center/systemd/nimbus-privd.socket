@@ -1,0 +1,20 @@
+# =============================================================================
+# nimbus-privd.socket: the privileged helper's socket
+# =============================================================================
+# What: /run/nimbus-privd.sock, mode 0660 root:nimbus-control. privd starts
+#       on the first connection and accepts only the nimbus-control uid
+#       (SO_PEERCRED), so group members who can open the file are refused.
+# Why:  docs/PLAN.md §4.1 and §4.3.
+# =============================================================================
+[Unit]
+Description=Nimbus Control Center privileged helper socket
+Documentation=@NIMBUS_HOME_URL@
+
+[Socket]
+ListenStream=/run/nimbus-privd.sock
+SocketUser=root
+SocketGroup=nimbus-control
+SocketMode=0660
+
+[Install]
+WantedBy=sockets.target

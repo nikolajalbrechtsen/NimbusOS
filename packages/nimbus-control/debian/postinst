@@ -1,0 +1,123 @@
+#!/bin/sh
+# =============================================================================
+# postinst for nimbus-control
+# =============================================================================
+# What: after debhelper's part (users and groups from sysusers.d, directories
+#       from tmpfiles.d, byte-compiling, enabling the units), on every
+#       configure:
+#         1. puts the marked include block for /etc/samba/nimbus/nimbus.conf
+#            at the end of /etc/samba/smb.conf if it is missing (NOTE-23);
+#         2. starts the units through deb-systemd-invoke, which respects
+#            policy-rc.d and does nothing where no systemd runs (the image
+#            build chroot). On upgrades nimbus-control is restarted only if
+#            this package's files changed; its ExecStartPre (nimbus-migrate)
+#            then migrates the state, with a backup (NOTE-59).
+#       On the first install only, so an administrator's later change stays:
+#         3. sets EXTRA_GROUPS and ADD_EXTRA_GROUPS in /etc/adduser.conf
+#            (NOTE-09), keeping a copy of the original for purge;
+#         4. turns nmbd off (NetBIOS is off by default; Settings can turn it
+#            on again);
+#         5. marks libvirt's "default" NAT network for autostart.
+# Why:  docs/PLAN.md NOTE-61: maintainer scripts never call docker, virsh or
+#       smbcontrol, and never start or restart anything except through
+#       deb-systemd-invoke.
+# =============================================================================
+set -e
+
+#DEBHELPER#
+
+PKGSTATE=/var/lib/nimbus-privd/package
+SMB_CONF=/etc/samba/smb.conf
+SMB_INCLUDE="include = /etc/samba/nimbus/nimbus.conf"
+ADDUSER_CONF=/etc/adduser.conf
+NETWORKS=/etc/libvirt/qemu/networks
+
+# The files this package installs under /usr/lib (programs and units), as one
+# checksum. Documentation changes with every version and is left out.
+payload_sum() {
+	dpkg-query -L nimbus-control | grep '^/usr/lib/' | while read -r f; do
+		if [ -f "$f" ]; then printf '%s\n' "$f"; fi
+	done | LC_ALL=C sort | xargs -r sha256sum | sha256sum | cut -d ' ' -f 1
+}
+
+# set_adduser_key KEY VALUE: make KEY=VALUE the active line in adduser.conf.
+set_adduser_key() {
+	key="$1"
+	line="$1=$2"
+	current="$(grep -E "^[[:space:]]*$key=" "$ADDUSER_CONF" | tail -n 1)"
+	if [ "$current" = "$line" ]; then
+		return 0
+	fi
+	if [ ! -e "$PKGSTATE/adduser.conf.orig" ]; then
+		cp -p "$ADDUSER_CONF" "$PKGSTATE/adduser.conf.orig"
+	fi
+	if [ -n "$current" ]; then
+		sed -i -E "s|^[[:space:]]*$key=.*|$line|" "$ADDUSER_CONF"
+	else
+		printf '%s\n' "$line" >>"$ADDUSER_CONF"
+	fi
+}
+
+case "$1" in
+	configure)
+		first_install=
+		if [ -z "$2" ]; then
+			first_install=yes
+		fi
+
+		# 1. Samba include (every configure; a Samba upgrade may have
+		#    replaced smb.conf)
+		if [ -f "$SMB_CONF" ]; then
+			if ! grep -qxF "$SMB_INCLUDE" "$SMB_CONF"; then
+				printf '\n%s\n%s\n%s\n' \
+					"# BEGIN nimbus-control: NimbusOS Samba settings, see /etc/samba/nimbus/nimbus.conf" \
+					"$SMB_INCLUDE" \
+					"# END nimbus-control" >>"$SMB_CONF"
+			fi
+		else
+			echo "nimbus-control: $SMB_CONF does not exist, so NimbusOS shares stay off until it does." >&2
+		fi
+
+		if [ -n "$first_install" ]; then
+			# 3. New accounts made with adduser join the Control Center groups.
+			if [ -f "$ADDUSER_CONF" ]; then
+				set_adduser_key EXTRA_GROUPS '"@NIMBUS_USER_EXTRA_GROUPS@"'
+				set_adduser_key ADD_EXTRA_GROUPS 1
+			fi
+
+			# 4. NetBIOS off: nmbd is disabled and stopped. samba's own
+			#    postinst keeps a disabled unit disabled on upgrades.
+			if systemctl --quiet is-enabled nmbd.service 2>/dev/null; then
+				systemctl --quiet --no-reload disable nmbd.service \
+					|| echo "nimbus-control: could not disable nmbd.service; NetBIOS stays on." >&2
+				deb-systemd-invoke stop nmbd.service >/dev/null || true
+			fi
+
+			# 5. libvirt's default network starts with libvirtd from now on
+			#    (the same link "virsh net-autostart default" makes).
+			if [ -f "$NETWORKS/default.xml" ] && [ -d "$NETWORKS/autostart" ] \
+				&& [ ! -e "$NETWORKS/autostart/default.xml" ] && [ ! -L "$NETWORKS/autostart/default.xml" ]; then
+				ln -s "$NETWORKS/default.xml" "$NETWORKS/autostart/default.xml"
+			fi
+		fi
+
+		# 2. Units. Starting an active unit changes nothing.
+		new_sum="$(payload_sum)"
+		old_sum="$(cat "$PKGSTATE/payload.sha256" 2>/dev/null || true)"
+		deb-systemd-invoke start nimbus-privd.socket nimbus-snapraid-sync.timer nimbus-recycle-clean.timer \
+			nimbus-netfix.service >/dev/null || true
+		if [ -z "$first_install" ] && [ "$new_sum" != "$old_sum" ]; then
+			# privd starts again (with the new code) on its next request.
+			deb-systemd-invoke stop nimbus-privd.service >/dev/null || true
+			deb-systemd-invoke restart nimbus-netfix.service >/dev/null || true
+			deb-systemd-invoke restart nimbus-control.service >/dev/null \
+				|| echo "nimbus-control: the Control Center did not restart; see 'journalctl -u nimbus-control'." >&2
+		else
+			deb-systemd-invoke start nimbus-control.service >/dev/null \
+				|| echo "nimbus-control: the Control Center did not start; see 'journalctl -u nimbus-control'." >&2
+		fi
+		printf '%s\n' "$new_sum" >"$PKGSTATE/payload.sha256"
+		;;
+esac
+
+exit 0

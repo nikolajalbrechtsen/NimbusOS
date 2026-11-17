@@ -1,0 +1,26 @@
+# =============================================================================
+# tmpfiles.d for nimbus-control (installed as /usr/lib/tmpfiles.d/nimbus-control.conf)
+# =============================================================================
+# What: the directories and empty generated files the Control Center needs
+#       (docs/PLAN.md §4.2). "d" never touches what is inside a directory,
+#       only the directory itself, so app data with container-owned files is
+#       left alone. The ISO library has the same owner and mode as a share,
+#       because an "isos" share may be bind-mounted onto it (NOTE-27).
+# Why:  created on install (postinst) and checked at every boot; no mkdir or
+#       chown in maintainer scripts.
+# =============================================================================
+#Type Path                               Mode User           Group          Age
+d     /var/lib/nimbus-control            0750 nimbus-control nimbus-control -
+d     /var/lib/nimbus-control/stacks     0750 nimbus-control nimbus-control -
+d     /var/lib/nimbus-control/backups    0750 nimbus-control nimbus-control -
+d     /var/lib/nimbus-vms                0755 root           root           -
+d     /var/lib/nimbus-vms/isos           2775 root           nimbus-smb     -
+d     /var/lib/nimbus-vms/images         0711 root           root           -
+d     /var/lib/nimbus-privd              0700 root           root           -
+d     /var/lib/nimbus-privd/package      0700 root           root           -
+d     /var/cache/nimbus-privd            0700 root           root           -
+d     /run/nimbus-control                0750 nimbus-control nimbus-control -
+d     /run/nimbus-control/vnc-tokens     0750 nimbus-control nimbus-control -
+d     /etc/nimbus                        0755 root           root           -
+f     /etc/samba/nimbus/settings.conf    0644 root           root           -
+f     /etc/samba/nimbus-shares.conf      0644 root           root           -

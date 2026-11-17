@@ -1,0 +1,20 @@
+# =============================================================================
+# nimbus-recycle-clean.service: empties share recycle bins past retention
+# =============================================================================
+# What: runs nimbus-recycle-clean, which deletes files in each share's
+#       .recycle/ folder that are older than that share's retention setting.
+#       Only .recycle/ folders of shares in /etc/samba/nimbus-shares.conf are
+#       touched.
+# Why:  docs/PLAN.md §4.1: deleted files stay recoverable for a while, then
+#       stop using space.
+# =============================================================================
+[Unit]
+Description=Empty Nimbus share recycle bins past their retention
+Documentation=@NIMBUS_HOME_URL@
+After=local-fs.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/lib/nimbus-control/bin/nimbus-recycle-clean
+Nice=10
+IOSchedulingClass=idle

@@ -1,0 +1,53 @@
+# =============================================================================
+# nimbus-control.service: the Nimbus Control Center web backend
+# =============================================================================
+# What: runs the FastAPI backend on 127.0.0.1:7777 as the unprivileged
+#       nimbus-control user (groups docker, libvirt, nimbus-smb from
+#       sysusers.d). Before every start, nimbus-migrate brings the state in
+#       /var/lib/nimbus-control to the current schema; if that fails, the
+#       service does not start (docs/PLAN.md NOTE-59).
+# Why:  docs/PLAN.md §4.1 and §4.3. Directories come from tmpfiles.d, not
+#       StateDirectory=, because systemd would chown StateDirectory=
+#       recursively and stacks/ holds files owned by container users.
+# =============================================================================
+[Unit]
+Description=Nimbus Control Center
+Documentation=@NIMBUS_HOME_URL@
+After=network.target docker.service libvirtd.service nimbus-privd.socket
+Wants=nimbus-privd.socket nimbus-websockify.service
+
+[Service]
+Type=exec
+User=nimbus-control
+Group=nimbus-control
+UMask=0027
+ExecStartPre=/usr/lib/nimbus-control/bin/nimbus-migrate
+ExecStart=/usr/lib/nimbus-control/bin/nimbus-control-server
+Restart=on-failure
+RestartSec=3s
+
+# Hardening (docs/PLAN.md §4.3)
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=/var/lib/nimbus-control /run/nimbus-control -/var/lib/nimbus-vms/isos
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+RestrictNamespaces=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+CapabilityBoundingSet=
+AmbientCapabilities=
+
+[Install]
+WantedBy=multi-user.target

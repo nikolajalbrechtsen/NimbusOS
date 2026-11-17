@@ -1,0 +1,22 @@
+# =============================================================================
+# sysusers.d for nimbus-control (installed as /usr/lib/sysusers.d/nimbus-control.conf)
+# =============================================================================
+# What: the system accounts of the Control Center (docs/PLAN.md §4.1, NOTE-25):
+#         nimbus-control  the backend's user and group; also the group whose
+#                         members may open the Control Center
+#         nimbus-smb      the group that owns every share folder; SMB-only
+#                         users are created in it by privd
+#         nimbus-guest    Samba's guest account for Public shares
+#       nimbus-control joins docker, libvirt and nimbus-smb. A group that
+#       doesn't exist yet is created as a system group.
+# Why:  declarative and idempotent; works in the image build chroot.
+#       Accounts are never removed, not even on purge: files and SMB users
+#       stay owned by them.
+# =============================================================================
+#Type Name           ID              GECOS                    Home directory           Shell
+g     nimbus-smb     -
+u     nimbus-control -               "Nimbus Control Center"  /var/lib/nimbus-control  /usr/sbin/nologin
+u     nimbus-guest   -:nimbus-smb    "Nimbus SMB guest"       /nonexistent             /usr/sbin/nologin
+m     nimbus-control docker
+m     nimbus-control libvirt
+m     nimbus-control nimbus-smb

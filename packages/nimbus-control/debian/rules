@@ -1,0 +1,29 @@
+#!/usr/bin/make -f
+# =============================================================================
+# debian/rules for nimbus-control
+# =============================================================================
+# What: standard debhelper build of the files staged from control-center/ by
+#       tools/build-debs.sh (tokens already filled in, docs/PLAN.md NOTE-49):
+#         - dh_python3 byte-compiles the private modules in
+#           /usr/lib/nimbus-control on install;
+#         - dh_installsysusers / dh_installtmpfiles create the users, groups
+#           and directories (debian/nimbus-control.{sysusers,tmpfiles});
+#         - dh_installsystemd enables the units but neither starts nor
+#           stops them during upgrades: the postinst starts them, and
+#           restarts them only when the package's files changed (NOTE-61).
+# Why:  maintainer scripts must also work in the image build chroot, where
+#       nothing runs; every start goes through deb-systemd-invoke there.
+# =============================================================================
+
+%:
+	dh $@ --with python3
+
+override_dh_python3:
+	dh_python3 /usr/lib/nimbus-control
+
+override_dh_installsystemd:
+	dh_installsystemd --no-start --no-stop-on-upgrade
+
+# The maintainer-script tests (tests/) need a container with the
+# dependencies installed; they run in CI, not during the package build.
+override_dh_auto_test:

@@ -1,0 +1,4 @@
+control-center/bin/nimbus-migrate usr/lib/nimbus-control/bin/
+control-center/migrations/*.py usr/lib/nimbus-control/migrations/
+control-center/systemd/* usr/lib/systemd/system/
+control-center/data/samba/nimbus.conf etc/samba/nimbus/

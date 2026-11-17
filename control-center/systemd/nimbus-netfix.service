@@ -1,0 +1,23 @@
+# =============================================================================
+# nimbus-netfix.service: keep libvirt guests forwarding while Docker runs
+# =============================================================================
+# What: after Docker starts, nimbus-netfix adds accept rules for the virbr+
+#       bridges to Docker's DOCKER-USER chain, so the FORWARD policy DROP that
+#       Docker sets doesn't cut VMs off. Started with docker.service (WantedBy)
+#       and stopped and restarted with it (PartOf).
+# Why:  docs/PLAN.md NOTE-19, following Docker's documentation for routing
+#       other traffic through a Docker host.
+# =============================================================================
+[Unit]
+Description=Let libvirt guests forward traffic while Docker is running
+Documentation=@NIMBUS_HOME_URL@
+After=docker.service libvirtd.service
+PartOf=docker.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/lib/nimbus-control/bin/nimbus-netfix
+
+[Install]
+WantedBy=docker.service

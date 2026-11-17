@@ -1,0 +1,2 @@
+catalog/manifest.schema.json usr/share/nimbus-control/catalog/
+catalog/[a-z0-9]*/ usr/share/nimbus-control/catalog/

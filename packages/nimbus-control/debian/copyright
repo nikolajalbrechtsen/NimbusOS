@@ -1,0 +1,28 @@
+Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
+Upstream-Name: NimbusOS
+Upstream-Contact: @NIMBUS_BUG_REPORT_URL@
+Source: @NIMBUS_HOME_URL@
+Comment: The web UI uses Inter and JetBrains Mono from Debian's fonts-inter
+ and fonts-jetbrains-mono packages; no font files are copied into this
+ package, so their SIL Open Font License stays with those packages.
+
+Files: *
+Copyright: @NIMBUS_COPYRIGHT_YEARS@ @NIMBUS_COPYRIGHT_HOLDER@
+License: GPL-3+
+
+License: GPL-3+
+ This program is free software: you can redistribute it and/or modify
+ it under the terms of the GNU General Public License as published by
+ the Free Software Foundation, either version 3 of the License, or
+ (at your option) any later version.
+ .
+ This program is distributed in the hope that it will be useful,
+ but WITHOUT ANY WARRANTY; without even the implied warranty of
+ MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ GNU General Public License for more details.
+ .
+ You should have received a copy of the GNU General Public License
+ along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ .
+ On Debian systems, the complete text of the GNU General Public License
+ version 3 can be found in "/usr/share/common-licenses/GPL-3".
