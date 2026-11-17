@@ -74,7 +74,8 @@ NimbusOS/
 ├── packages/                         one Debian source package per directory: debhelper-compat (= 13), 3.0 (native)
 │   ├── nimbusos-archive-keyring/     keys/*.asc → dearmored NimbusOS keyring
 │   ├── nimbusos-docker-keyring/      Docker's key → /usr/share/keyrings/docker-archive-keyring.gpg (NOTE-05)
-│   ├── nimbusos-release/             os-release.in, apt/*, nimbus-update (CLI + man page), systemd/*
+│   ├── nimbusos-release/             os-release, apt/*, nimbus-update/ (CLI, man page, default settings),
+│   │                                 flathub/, systemd/*, tests/ (pytest, apt pinning proof, install test)
 │   ├── nimbusos-branding/            art/*.svg, grub/, plymouth/, sddm/, calamares/, plasma/, xdg/, Makefile
 │   ├── nimbus-control/               debian/ only; payload staged from control-center/ at build time
 │   ├── nimbus-catalog/               debian/ only; payload staged from catalog/ at build time
@@ -302,9 +303,9 @@ Because live-build only places keys at that fixed `trusted.gpg.d/<name>.asc` pat
 `tools/fetch-docker-key.sh` (deliverable 4) manages the one copy in the repository, `build/config/archives/docker.key.chroot`:
 - **`--write`** downloads the key from `https://download.docker.com/linux/debian/gpg` over HTTPS only and writes it only if it holds exactly the pinned key. The file stays byte-identical to Docker's download, because live-build copies it unchanged into the chroot's `trusted.gpg.d`.
 - **`--verify-local`** (offline, CI on every push) checks the key and the fingerprint comments, that `docker.list.binary` uses `signed-by=` the packaged keyring, that `docker.list.chroot` has no `signed-by`, and the marker lines.
-- **`--check`** (CI, network) compares the committed key material with what Docker serves now, so a key rotation is noticed early.
+- **`--check`** (network) compares the committed key material with what Docker serves now, so a key rotation is noticed early. It runs in a weekly scheduled job in `refresh.yml` (deliverable 10). If the key changed, the job fails and opens a GitHub issue ("Docker's APT signing key changed"), at most one open issue at a time, using the `gh` CLI with `issues: write` for that job only. The workflow never updates the key itself: a person runs `tools/fetch-docker-key.sh --write`, reviews the change and releases it.
 
-`build.sh` and `tools/build-debs.sh` check the fingerprint before every build. Both sources carry `arch=amd64`, so adding a foreign architecture later (for example i386) doesn't make apt look for Docker packages Docker doesn't build. `nimbusos-release` ships `nimbusos-docker.pref`, which pins the Docker origin the same way as NimbusOS's: priority 1 for everything, 500 for `docker-ce`, `docker-ce-cli`, `containerd.io`, `docker-compose-plugin`, `docker-buildx-plugin` and `docker-ce-rootless-extras`. Docker's repository therefore cannot replace Debian packages.
+`build.sh` and `tools/build-debs.sh` check the fingerprint before every build. Both sources carry `arch=amd64`, so adding a foreign architecture later (for example i386) doesn't make apt look for Docker packages Docker doesn't build. `nimbusos-release` ships `nimbusos-docker.pref`, which pins the Docker origin the same way as NimbusOS's: priority 1 for everything, 500 for `docker-ce`, `docker-ce-cli`, `containerd.io`, `docker-compose-plugin`, `docker-buildx-plugin`, `docker-ce-rootless-extras` and `docker-model-plugin`. That list was taken from the 11 packages Docker's `trixie` index actually contains: `docker-ce` 29.x recommends `docker-ce-rootless-extras`. Docker's repository therefore cannot replace Debian packages, and `packages/nimbusos-release/tests/apt-integration.test.sh` proves it (§7).
 
 **NOTE-06 — Calamares configuration is live-only.** Calamares runs only in the live session, and its own `packages` step purges it from the installed system. `settings.conf` and the module overrides therefore live in `includes.chroot_after_packages/`, where they replace `calamares-settings-debian`'s copies inside the live image. The branding component `/usr/share/calamares/branding/nimbusos/` ships in `nimbusos-branding`, as specified. Debian's `bootloader-config` and `sources-media` steps are kept. Debian's `sources-final` is replaced by `nimbus-sources-final`, which writes deb822 `/etc/apt/sources.list.d/debian.sources` with `main contrib non-free non-free-firmware` for `trixie`, `trixie-updates` and `trixie-security`, and empties the legacy `sources.list`. The NimbusOS and Docker sources are already on the target, because `nimbusos-release` is part of the copied image. A final `nimbus-target-cleanup` step deletes the live-only files from the target. `users.conf` uses the Calamares 3.3 `hostname:` block with `template: "nimbusos"`.
 
@@ -407,7 +408,14 @@ Because live-build only places keys at that fixed `trusted.gpg.d/<name>.asc` pat
 
 **NOTE-48 — Which lists feed `nimbusos-desktop`.** `nimbusos-desktop` gets its Depends from the package lists at build time, through a substvar, so the lists and the metapackage can't drift apart. Lists containing the line `#! nimbus: exclude-from-desktop-depends` are skipped: Calamares, which removes itself after install (if the metapackage depended on it, removing Calamares would remove the metapackage), and `90-nimbusos` (the metapackage itself). The `*.list.binary` files are never read: they only fill the ISO's package pool, where GRUB for BIOS and for UEFI sit in separate lists because the two conflict and the installer picks one. A package listed twice is an error. The marker line is an ordinary comment as far as live-build is concerned (NOTE-53).
 
-**NOTE-49 — `nimbus.conf` values reach the packages.** Build tunables that installed systems need (the APT URL, the `releases.json` URL, the Maintainer) are substituted from `build/nimbus.conf` into package templates at build time, so `nimbus.conf` remains the one place to change them.
+**NOTE-49 — `nimbus.conf` values reach the packages.** Build tunables that installed systems need (the APT URL, the `releases.json` URL, the Maintainer) are written as `@NIMBUS_*@` tokens in the packaging and payload files. That includes `debian/control`, `debian/changelog` trailers, `debian/copyright`, os-release, the APT source and pin files, and `nimbus-update`'s build values. `tools/build-debs.sh` fills them in from `build/nimbus.conf` when it stages a package, so `nimbus.conf` remains the one place to change them. The maintainer's address in particular exists only in `nimbus.conf` and in the built packages' `Maintainer` field and changelog (A11). An unknown token stops the build, and `install.test.sh` checks that no token reaches an installed system. Staging also sets file modes by content (`#!` → 0755, otherwise 0644), so packages are identical whether they were built from a Windows or a Linux checkout.
+
+**NOTE-54 — Justified lintian overrides.** lintian 2.122 is clean for the packages built so far except for three tags on `nimbusos-release`. Each is overridden with its justification in `debian/lintian-overrides`:
+- `package-installs-apt-sources`: shipping the NimbusOS source is this package's purpose (spec 4.1).
+- `package-installs-apt-preferences` (×2): the pinning is the safeguard required by spec 4.2.
+- `uses-dpkg-database-directly`: a false positive. `nimbus-update` only probes dpkg's `lock-frontend`, the documented frontend locking interface, without waiting.
+
+`tools/build-debs.sh --lintian` fails on any other error or warning.
 
 **NOTE-50 — Developing on Windows.** The repository is edited on Windows with `core.filemode=false`. `.gitattributes` forces LF line endings, and executable bits are recorded explicitly with `git update-index --chmod=+x` for every script, hook and `debian/rules`. Everything that needs Debian runs in `tools/dev-shell.sh`. On this workstation that is Podman inside the WSL distribution `nimbus-build`; any Docker or Podman host works.
 
@@ -415,13 +423,15 @@ Because live-build only places keys at that fixed `trusted.gpg.d/<name>.asc` pat
 
 **NOTE-51 — `wsdd2` instead of `wsdd`.** Trixie has no `wsdd` package (§7). `wsdd2` (1.8.7, main) serves the same purpose: it makes the machine show up under Network in Windows Explorer through WS-Discovery. The storage list, the `nimbus-control` Depends, the services table, the alert rules and the Settings page all use `wsdd2` and its unit, `wsdd2.service`.
 
-**NOTE-52 — The APT repository can't be built with Trixie's `reprepro`.** Debian rolled `reprepro` back to 5.3.1 (`5.4.6+really5.3.2`). That version has `ValidFor:` but not `Limit:`, so a suite can hold only one version of each package. That breaks "keep the last 3 versions so users can roll back with `apt install <pkg>=<version>`". The closest supported alternative, used in deliverable 10, is `apt-ftparchive` from Debian's `apt-utils`, driven by `tools/publish-apt.sh`:
-- the pool keeps the newest 3 versions of each package per suite, and older ones are pruned;
-- `apt-ftparchive packages` indexes every version in the pool, so all 3 stay installable;
-- `apt-ftparchive release` writes `Release` with Origin, Label, Suite, Codename and `Valid-Until`;
-- `gpg` produces `InRelease` and `Release.gpg`.
+**NOTE-52 — The APT repository is built with `apt-ftparchive`, not `reprepro` (decided 2026-11-17).** Debian rolled `reprepro` back to 5.3.1 (`5.4.6+really5.3.2`). Tested in deliverable 5: a `conf/distributions` with `Limit: 3` fails with "Unknown header 'Limit'!". So a reprepro suite can hold only one version of each package, which breaks rollback with `apt install <pkg>=<version>`. reprepro would also need its database to survive between CI runs.
 
-`aptly` 1.6.1 is also in Trixie and keeps several versions natively. Its publish command has no `Valid-Until` option, though, which the weekly re-signing relies on. If you'd rather keep `reprepro` and accept "latest version only" for rollbacks, say so before deliverable 10.
+Deliverable 10 therefore uses `apt-ftparchive` from Debian's `apt-utils`, driven by `tools/publish-apt.sh`, which needs no database:
+- **Pool:** `pool/` holds every published `.deb`. Pruning keeps the newest 3 versions of each package per suite, ordered with `dpkg --compare-versions` and never by file name or date, so `0.2.0~beta.1 < 0.2.0`.
+- **Indexes:** `Packages`, `Packages.xz`, `Release`, `InRelease` and `Release.gpg`, with `Valid-Until` 14 days after signing. Acquire-By-Hash is enabled (`APT::FTPArchive::DoByHash`), so clients that start an update while a publish is replacing the indexes still get consistent files.
+- **Re-signing:** `refresh.yml` only re-signs. It rewrites the `Date` and `Valid-Until` fields of each existing `Release` (the index hashes don't change) and signs it again. It never regenerates, adds or prunes packages.
+- **Test:** `tools/tests/publish-apt.test.sh` builds fake `.deb` files and proves pruning keeps exactly the right 3 versions, including the `~beta` ordering. It also checks that a re-sign leaves the package indexes byte-identical.
+
+`aptly` (also in Trixie) was considered and rejected: it has no `Valid-Until` option, which the weekly re-signing relies on.
 
 **NOTE-53 — Package-list format rules.** live-build passes each list through `printf` as a format string and reads it with `read` (`Expand_packagelist` in live-build 1:20250505). So:
 - a `%` or `\` anywhere in a list, comments included, corrupts it;
@@ -457,6 +467,41 @@ NimbusOS lists therefore hold one package name per line and plain `# ` comment l
 - **Packages:** Docker's `trixie` `InRelease` verifies against that key. 114 distinct packages are all present, including `docker-ce`, `docker-ce-cli`, `containerd.io`, `docker-compose-plugin` and `docker-buildx-plugin`. The chroot lists, Docker included, resolve together to 1,914 packages.
 - **Tests:** `tools/tests/docker-archive.test.sh` 9/9 and `tools/tests/image-apt-check.test.sh` 7/7, the latter using the real rendered source files.
 
+**Deliverable 5, part 1** (2026-11-17, `debian:trixie` container via `tools/dev-shell.sh`):
+- **Build:** `nimbusos-archive-keyring`, `nimbusos-docker-keyring`, `nimbusos-release` and `nimbusos-desktop` build with `tools/build-debs.sh --lintian` (lintian 2.122.0, `--fail-on error,warning`; overrides in NOTE-54). `nimbusos-desktop` gets 109 dependencies: 103 from the lists plus 6 NimbusOS packages.
+- **`pytest packages/nimbusos-release/tests`:** 14 passed.
+- **`apt-integration.test.sh`:** 6 passed. Real apt 3 output for an unsigned repository is classified as `signature`, and for an unresolvable host as `dns`.
+- **`install.test.sh`:** 22 passed. It covers the os-release diversion and its removal, `update.conf` creation and preservation, the beta source, `#clear` leaving exactly 2 Debian-Security origins, the enabled timers, and purge.
+
+**The `apt-cache policy` proof** (spec 4.2), produced by `apt-integration.test.sh`. Loopback hosts stand in for Debian (127.0.0.2), NimbusOS (127.0.0.1) and Docker (127.0.0.3); the NimbusOS and Docker repositories also offer a newer `bash`, as if compromised; the pin files are the shipped ones, rendered for those hosts:
+
+```
+bash:
+  Installed: (none)
+  Candidate: 5.2.37-2
+  Version table:
+     99.0 1
+          1 http://127.0.0.1/nimbusos ./ Packages
+     98.0 1
+          1 http://127.0.0.3/docker ./ Packages
+     5.2.37-2 500
+        500 http://127.0.0.2/debian ./ Packages
+nimbus-control:
+  Installed: (none)
+  Candidate: 0.2.0
+  Version table:
+     0.2.0 500
+          1 http://127.0.0.1/nimbusos ./ Packages
+docker-ce:
+  Installed: (none)
+  Candidate: 29.0
+  Version table:
+     29.0 500
+          1 http://127.0.0.3/docker ./ Packages
+```
+
+How to read it: the NimbusOS and Docker repositories offer `bash` 99.0 and 98.0, yet both are pinned to 1, so Debian's 5.2.37-2 (priority 500) stays the candidate. NimbusOS's own `nimbus-control` and Docker's `docker-ce` get 500. In the version table, the left number is the priority of the version; the indented line shows the source's default (1).
+
 Facts confirmed by reading live-build `1:20250505+deb13u1`'s own scripts and Debian's `calamares-settings-debian 13.0.13`:
 - `chroot_archives` copies `*.key.chroot` unchanged to `trusted.gpg.d/<name>.asc` (`.gpg` if the file isn't ASCII-armored; it tests with `grep "PGP PUBLIC KEY BLOCK"`), and removes both the `.list.chroot` source and that key itself at the end of the chroot stage (NOTE-03).
 - `binary_package-lists` resolves each `.list.binary` separately against an empty dpkg status.
@@ -476,7 +521,7 @@ Facts confirmed by reading live-build `1:20250505+deb13u1`'s own scripts and Deb
 | 2 | Build entry point | `build/nimbus.conf`, `build/build.sh`, `build/lib/common.sh`, `tools/build-debs.sh`, `tools/deb-version.sh` |
 | 3 | Package lists | `build/config/package-lists/*`, `tools/gen-desktop-depends.sh`, `tools/verify-trixie.sh`, `tools/dev-shell.sh`, `tools/tests/{deb-version,image-apt-check}.test.sh` |
 | 4 | Build-time archives | `build/config/archives/{docker.list.chroot,docker.key.chroot,docker.list.binary}`, `tools/fetch-docker-key.sh`, `tools/tests/docker-archive.test.sh` |
-| 5 | Debian packaging (7 packages) | `packages/*/debian/**`; payloads for both keyrings, release (os-release, sources, pinning with `apt-cache policy` proof, unattended-upgrades drop-in, `nimbus-update`), branding (all themes and art, CC-BY-SA-4.0 text from SPDX) and the desktop metapackage |
+| 5 | Debian packaging (7 packages), in three parts | **Part 1:** `packages/{nimbusos-archive-keyring,nimbusos-docker-keyring,nimbusos-release,nimbusos-desktop}/**` (os-release, source, pinning with the `apt-cache policy` proof, unattended-upgrades drop-ins, `nimbus-update`, timers, Flathub setup, tests), plus `build-debs.sh` token rendering, mode normalization and `--only`. **Part 2:** `packages/nimbusos-branding/**` (all themes and art, CC-BY-SA-4.0 text from SPDX). **Part 3:** `packages/{nimbus-control,nimbus-catalog}/debian/**` and their maintainer-script tests |
 | 6 | Live hooks | `build/config/hooks/live/*.hook.chroot` |
 | 7 | Live-only files and boot menus | `build/config/includes.chroot_after_packages/**`, `build/config/bootloaders/**` |
 | 8 | Nimbus Control Center | `control-center/**` (backend, common, privd, frontend, bin, systemd, data, tests), in several batches |
@@ -494,3 +539,4 @@ Facts confirmed by reading live-build `1:20250505+deb13u1`'s own scripts and Deb
 4. **Review changes.** NOTE-03 (no hand-run stages; one Docker source), NOTE-04 (repository check in `build.sh`), NOTE-14 (code expires after first use or 30 s), NOTE-23 (ucf CI test), NOTE-26 (hide "Pooled + parity" without snapraid), NOTE-34 (locks, random delay, never reboot), NOTE-35 (journal), NOTE-41 (xz, sums for parts and ISO, PowerShell join), NOTE-43 (ruff on the runner only).
 5. **Docker keyring package.** Docker's key ships in its own package, `nimbusos-docker-keyring`, which `nimbusos-desktop` depends on. That makes seven packages. `build.sh` checks the finished image's APT setup (§2, step 6).
 6. **Test environment.** `tools/dev-shell.sh` runs a `debian:trixie` container with Docker or Podman. The version-mapping tests pass there with real `dpkg` 1.22.22: 40 of 40 checks.
+7. **APT repository and Docker key rotation** (before deliverable 5). `apt-ftparchive` replaces `reprepro`, with the requirements in NOTE-52. A weekly job runs `fetch-docker-key.sh --check`; on a change it fails and opens one issue, and it never updates the key (NOTE-05). The maintainer's address appears only in the `Maintainer` field and `debian/changelog` (A11, NOTE-49).

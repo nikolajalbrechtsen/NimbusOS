@@ -1,0 +1,11 @@
+// NimbusOS: daily package-list refresh and unattended upgrades.
+//
+// Shipped by the nimbusos-release package. It is read after Debian's
+// 20auto-upgrades and turns both on regardless of how that file was
+// answered at install time. What unattended-upgrades may install is limited
+// to Debian security updates by 52nimbusos-unattended-upgrades. NimbusOS's
+// own updates follow the policy chosen in the Control Center instead
+// (nimbus-update-auto.timer, docs/PLAN.md NOTE-34).
+APT::Periodic::Update-Package-Lists "1";
+APT::Periodic::Unattended-Upgrade "1";
+APT::Periodic::AutocleanInterval "7";

@@ -1,0 +1,17 @@
+# NimbusOS repository pinning
+#
+# Shipped by the nimbusos-release package. Everything from the NimbusOS
+# repository gets priority 1: it can still provide a package nobody else
+# provides, but it can never replace or upgrade a Debian package. Only
+# NimbusOS's own packages (nimbus-*, nimbusos-*) get the normal priority 500.
+# So even a broken or compromised NimbusOS repository cannot swap out, say,
+# bash or openssh. packages/nimbusos-release/tests/pinning.test.sh in the
+# NimbusOS source proves this with apt-cache policy.
+
+Package: *
+Pin: origin @NIMBUS_APT_HOST@
+Pin-Priority: 1
+
+Package: nimbus-* nimbusos-*
+Pin: origin @NIMBUS_APT_HOST@
+Pin-Priority: 500

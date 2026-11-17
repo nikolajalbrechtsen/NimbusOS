@@ -1,0 +1,30 @@
+#!/bin/sh
+# =============================================================================
+# postinst for nimbusos-release
+# =============================================================================
+# What: creates /etc/nimbusos/update.conf from the packaged default the first
+#       time (never overwrites it), and rewrites the beta source while the
+#       Beta channel is selected so a changed URL or keyring path takes
+#       effect. Then the debhelper snippets enable the timers.
+# Why:  update.conf holds the administrator's choices (channel, policy), so
+#       it is created once and then only changed by nimbus-update or the
+#       Control Center. Every step checks before it acts, so running this
+#       again changes nothing.
+# =============================================================================
+set -e
+
+case "$1" in
+	configure)
+		install -d -m 0755 /etc/nimbusos /var/lib/nimbusos
+		if [ ! -e /etc/nimbusos/update.conf ]; then
+			install -m 0644 /usr/share/nimbusos-release/update.conf.default /etc/nimbusos/update.conf
+		fi
+		if grep -Eqx "CHANNEL=[\"']?beta[\"']?" /etc/nimbusos/update.conf; then
+			nimbus-update channel beta --no-check >/dev/null
+		fi
+		;;
+esac
+
+#DEBHELPER#
+
+exit 0

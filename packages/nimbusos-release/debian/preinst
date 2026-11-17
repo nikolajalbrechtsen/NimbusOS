@@ -1,0 +1,24 @@
+#!/bin/sh
+# =============================================================================
+# preinst for nimbusos-release
+# =============================================================================
+# What: diverts base-files' /usr/lib/os-release to /usr/lib/os-release.debian
+#       before this package's own os-release is unpacked.
+# Why:  docs/PLAN.md NOTE-36: the system identifies as NimbusOS, while
+#       base-files keeps owning (and updating) its file under the diverted
+#       name. /etc/os-release stays base-files' symlink and therefore points
+#       at the NimbusOS file. Adding the same diversion again on upgrade is a
+#       no-op, so this is safe to run every time.
+# =============================================================================
+set -e
+
+case "$1" in
+	install|upgrade)
+		dpkg-divert --package nimbusos-release --rename \
+			--divert /usr/lib/os-release.debian --add /usr/lib/os-release
+		;;
+esac
+
+#DEBHELPER#
+
+exit 0

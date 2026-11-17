@@ -1,0 +1,27 @@
+#!/bin/sh
+# =============================================================================
+# postrm for nimbusos-release
+# =============================================================================
+# What: on removal, gives /usr/lib/os-release back to base-files (removes the
+#       diversion made by preinst); on purge, also deletes the files this
+#       package created at runtime (update settings, update status, the beta
+#       source, the Flathub stamp).
+# Why:  leave the system exactly as Debian's base-files had it. The Flathub
+#       remote itself is left in place: it belongs to Flatpak once added.
+# =============================================================================
+set -e
+
+case "$1" in
+	remove|abort-install|disappear)
+		dpkg-divert --package nimbusos-release --rename \
+			--divert /usr/lib/os-release.debian --remove /usr/lib/os-release
+		;;
+	purge)
+		rm -f /etc/apt/sources.list.d/nimbusos-beta.sources
+		rm -rf /etc/nimbusos /var/lib/nimbusos
+		;;
+esac
+
+#DEBHELPER#
+
+exit 0

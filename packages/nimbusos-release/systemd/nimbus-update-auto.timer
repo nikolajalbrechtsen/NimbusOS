@@ -1,0 +1,14 @@
+# nimbus-update-auto.timer — run nimbus-update-auto.service daily (nimbusos-release)
+# The random delay spreads machines over six hours so they don't all hit the
+# repository at once.
+[Unit]
+Description=Daily automatic NimbusOS updates
+
+[Timer]
+OnBootSec=30min
+OnCalendar=daily
+RandomizedDelaySec=6h
+Persistent=true
+
+[Install]
+WantedBy=timers.target

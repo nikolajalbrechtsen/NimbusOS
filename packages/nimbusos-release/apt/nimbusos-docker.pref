@@ -1,0 +1,16 @@
+# Docker CE repository pinning
+#
+# Shipped by the nimbusos-release package. Docker's repository may supply
+# only Docker's own engine packages; everything else from it gets priority 1,
+# so it can never replace a Debian package. Other packages Docker publishes
+# can still be installed by hand, but are only upgraded automatically once
+# they are listed here. The source itself is
+# /etc/apt/sources.list.d/docker.list (docs/PLAN.md NOTE-03, NOTE-05).
+
+Package: *
+Pin: origin @NIMBUS_DOCKER_APT_HOST@
+Pin-Priority: 1
+
+Package: docker-ce docker-ce-cli containerd.io docker-compose-plugin docker-buildx-plugin docker-ce-rootless-extras docker-model-plugin
+Pin: origin @NIMBUS_DOCKER_APT_HOST@
+Pin-Priority: 500

@@ -1,0 +1,21 @@
+# nimbus-update-auto.service — "Automatic" NimbusOS updates (nimbusos-release)
+# Upgrades the installed NimbusOS packages and installs their new
+# dependencies, but only under the Automatic policy. If apt, dpkg or
+# unattended-upgrades is busy, nimbus-update exits with 75 and this unit
+# retries after 30 minutes, at most three more times per day. It never
+# restarts the machine (docs/PLAN.md NOTE-34).
+[Unit]
+Description=Install NimbusOS updates automatically
+Documentation=man:nimbus-update(1)
+Wants=network-online.target
+After=network-online.target
+StartLimitIntervalSec=1d
+StartLimitBurst=4
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/nimbus-update auto
+Restart=on-failure
+RestartSec=30min
+Nice=10
+IOSchedulingClass=idle

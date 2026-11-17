@@ -1,0 +1,30 @@
+#!/bin/sh
+# =============================================================================
+# nimbus-flathub-setup — add the Flathub remote once
+# =============================================================================
+# What: adds Flathub as a system-wide Flatpak remote, using Flathub's own
+#       .flatpakrepo file (which carries Flathub's signing key) over HTTPS,
+#       then records that it is done so it never runs again.
+# Why:  spec section 1 ("Flatpak with Flathub pre-added"). Flathub's key is
+#       not copied into the NimbusOS source (docs/PLAN.md NOTE-11). Runs from
+#       nimbus-flathub-setup.service at boot, and once during the image build
+#       (hook 0100), so the ISO already has Flathub. If you remove Flathub
+#       later, it stays removed.
+# =============================================================================
+set -eu
+
+STAMP=/var/lib/nimbusos/flathub-setup-done
+URL=https://dl.flathub.org/repo/flathub.flatpakrepo
+
+if [ -e "$STAMP" ]; then
+	exit 0
+fi
+if ! command -v flatpak >/dev/null 2>&1; then
+	echo "flatpak is not installed; nothing to do."
+	exit 0
+fi
+
+flatpak remote-add --system --if-not-exists flathub "$URL"
+mkdir -p "$(dirname "$STAMP")"
+: >"$STAMP"
+echo "Flathub added."

@@ -488,6 +488,27 @@ Run the refresh workflow (GitHub -> Actions -> refresh -> Run workflow) to re-si
 }
 
 # -----------------------------------------------------------------------------
+# File modes of staged copies
+# -----------------------------------------------------------------------------
+# nimbus_normalize_modes DIR — directories 0755; regular files 0755 if they
+# start with "#!" (scripts, debian/rules, maintainer scripts), else 0644.
+# Why: a checkout on a Windows file system (WSL /mnt/c, Docker Desktop) shows
+# every file as 0777, and debhelper runs an executable debian/install as a
+# script. With this rule a package is identical whichever host it was built
+# on, and it matches the executable bits recorded in git.
+nimbus_normalize_modes() {
+	local f
+	find "$1" -type d -exec chmod 0755 {} +
+	while IFS= read -r -d '' f; do
+		if [[ "$(head -c 2 -- "$f")" == "#!" ]]; then
+			chmod 0755 -- "$f"
+		else
+			chmod 0644 -- "$f"
+		fi
+	done < <(find "$1" -type f -print0)
+}
+
+# -----------------------------------------------------------------------------
 # @NIMBUS_*@ templates (docs/PLAN.md NOTE-49)
 # -----------------------------------------------------------------------------
 

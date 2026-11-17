@@ -1,0 +1,14 @@
+os-release usr/lib/
+apt/nimbusos.sources etc/apt/sources.list.d/
+apt/nimbusos.pref etc/apt/preferences.d/
+apt/nimbusos-docker.pref etc/apt/preferences.d/
+apt/21nimbusos-periodic etc/apt/apt.conf.d/
+apt/52nimbusos-unattended-upgrades etc/apt/apt.conf.d/
+nimbus-update/nimbus-update usr/bin/
+nimbus-update/update.conf.default usr/share/nimbusos-release/
+flathub/nimbus-flathub-setup usr/lib/nimbusos/
+systemd/nimbus-flathub-setup.service usr/lib/systemd/system/
+systemd/nimbus-update-check.service usr/lib/systemd/system/
+systemd/nimbus-update-check.timer usr/lib/systemd/system/
+systemd/nimbus-update-auto.service usr/lib/systemd/system/
+systemd/nimbus-update-auto.timer usr/lib/systemd/system/

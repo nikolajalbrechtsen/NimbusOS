@@ -1,0 +1,18 @@
+# nimbus-flathub-setup.service — add the Flathub remote once (nimbusos-release)
+# Runs at boot until it has succeeded once; then the stamp file stops it.
+[Unit]
+Description=Add the Flathub remote for Flatpak
+Documentation=man:flatpak-remote-add(1)
+Wants=network-online.target
+After=network-online.target
+ConditionPathExists=!/var/lib/nimbusos/flathub-setup-done
+ConditionPathExists=/usr/bin/flatpak
+
+[Service]
+Type=oneshot
+ExecStart=/usr/lib/nimbusos/nimbus-flathub-setup
+Restart=on-failure
+RestartSec=10min
+
+[Install]
+WantedBy=multi-user.target

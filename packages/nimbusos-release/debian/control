@@ -1,0 +1,31 @@
+Source: nimbusos-release
+Section: admin
+Priority: optional
+Maintainer: @NIMBUS_MAINTAINER@
+Build-Depends: debhelper-compat (= 13)
+Standards-Version: 4.7.2
+Rules-Requires-Root: no
+Homepage: @NIMBUS_HOME_URL@
+Vcs-Browser: @NIMBUS_HOME_URL@
+Vcs-Git: @NIMBUS_HOME_URL@.git
+
+Package: nimbusos-release
+Architecture: all
+Depends: ${misc:Depends},
+ nimbusos-archive-keyring (>= ${binary:Version}),
+ python3,
+ python3-apt,
+ gpgv,
+ unattended-upgrades
+Recommends: flatpak
+Description: NimbusOS release information, update channel and update tool
+ Identifies the system as NimbusOS (/usr/lib/os-release, with the Debian
+ file kept as /usr/lib/os-release.debian) and connects it to the NimbusOS
+ APT repository:
+  - the repository source (stable channel) and apt pinning that lets the
+    NimbusOS and Docker repositories supply only their own packages;
+  - an unattended-upgrades policy that installs Debian security updates
+    daily and never restarts the machine;
+  - nimbus-update, which checks, installs and configures updates (channel
+    stable or beta, policy automatic, notify or off), with its daily timers;
+  - a one-time setup of the Flathub remote for Flatpak.

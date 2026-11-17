@@ -1,0 +1,98 @@
+.\" nimbus-update(1) - manual page, shipped by nimbusos-release
+.TH NIMBUS-UPDATE 1 "2026-11-17" "NimbusOS" "NimbusOS"
+.SH NAME
+nimbus-update \- check, install and configure NimbusOS updates
+.SH SYNOPSIS
+.B nimbus-update
+.RB [ \-\-json ]
+.I command
+.RI [ options ]
+.SH DESCRIPTION
+.B nimbus-update
+holds all update logic of a NimbusOS system. NimbusOS's own packages come
+from the NimbusOS APT repository; Debian packages come from Debian's
+mirrors. The Nimbus Control Center calls this tool through its privileged
+helper; administrators can use it directly.
+.PP
+Debian security updates are installed daily by
+.BR unattended-upgrades (8).
+NimbusOS updates follow the policy set with
+.BR "nimbus-update policy" .
+The system never restarts on its own.
+.SH COMMANDS
+.TP
+.B status
+Show the installed version, the channel, the policy, and the result of the
+last check (pending updates, problems, whether a restart is required).
+.TP
+.BR check " [" \-\-scheduled ]
+Refresh the package lists, explain any failure (name resolution, secure
+connection, signature, expired metadata, unreachable server), list pending
+updates grouped as Security, NimbusOS and Debian, fetch the signed release
+notes, and store the result in
+.IR /var/lib/nimbusos/update\-status.json .
+A repository whose signature can't be verified is reported as an error,
+never as "no updates".
+With
+.B \-\-scheduled
+(used by the daily timer) nothing is done when the policy is
+.BR off ,
+and the exit status is always 0.
+.TP
+.B install
+Refresh the package lists and run a full upgrade, non-interactively,
+keeping locally changed configuration files. Waits up to ten minutes for a
+running apt or unattended-upgrades to finish.
+.TP
+.B auto
+The
+.B automatic
+policy: upgrade the installed NimbusOS packages and install any new
+dependencies they bring. Never waits for a lock: if apt, dpkg or
+unattended-upgrades is busy, it exits with status 75 and the timer tries
+again later.
+.TP
+.BR channel " " stable | beta " [" \-\-no\-check ]
+Select the update channel. Beta adds the beta suite of the NimbusOS
+repository. Going back to stable never downgrades: installed beta versions
+stay until a stable release is newer.
+.TP
+.BR policy " " automatic | notify | off
+.B automatic
+installs NimbusOS updates daily;
+.B notify
+only checks daily;
+.B off
+does neither (a manual check still works).
+.TP
+.BR history " [" \-\-limit " " \fIN\fR]
+List past apt runs from
+.IR /var/log/apt/history.log ,
+newest first.
+.SH OPTIONS
+.TP
+.B \-\-json
+Print exactly one JSON document on standard output; progress goes to
+standard error.
+.SH FILES
+.TP
+.I /etc/nimbusos/update.conf
+Channel and policy (CHANNEL=stable|beta, POLICY=automatic|notify|off).
+.TP
+.I /etc/apt/sources.list.d/nimbusos.sources
+The stable channel source.
+.TP
+.I /etc/apt/sources.list.d/nimbusos\-beta.sources
+Present while the beta channel is selected.
+.TP
+.I /etc/apt/preferences.d/nimbusos.pref
+Pinning: the NimbusOS repository may supply only NimbusOS's own packages.
+.TP
+.I /var/lib/nimbusos/update\-status.json
+Result of the last check.
+.SH EXIT STATUS
+0 success, 1 failure, 2 usage error (for example not root), 75 busy.
+.SH SEE ALSO
+.BR apt\-get (8),
+.BR unattended\-upgrades (8),
+.BR apt_preferences (5)

@@ -1,0 +1,30 @@
+#!/usr/bin/make -f
+# =============================================================================
+# debian/rules for nimbusos-archive-keyring
+# =============================================================================
+# What: dearmors every keys/*.asc into one binary keyring,
+#       /usr/share/keyrings/nimbusos-archive-keyring.gpg.
+# Why:  apt's Signed-By and gpgv read binary keyrings, and the repository
+#       keeps no binary files (docs/PLAN.md NOTE-12). Several keys may be
+#       present during a key rotation (docs/SIGNING.md).
+# =============================================================================
+
+# A private GnuPG home inside the build tree: never touch the builder's ~/.gnupg.
+export GNUPGHOME := $(CURDIR)/debian/gnupghome
+
+%:
+	dh $@
+
+override_dh_auto_build:
+	install -d -m 0700 $(GNUPGHOME)
+	@set -e; \
+	keys="$$(find keys -maxdepth 1 -name '*.asc' | LC_ALL=C sort)"; \
+	if [ -z "$$keys" ]; then \
+		echo "keys/ contains no *.asc file: commit the archive public key first (docs/SIGNING.md)." >&2; \
+		exit 1; \
+	fi; \
+	for key in $$keys; do gpg --batch --quiet --dearmor < "$$key"; done > debian/nimbusos-archive-keyring.gpg
+	gpg --batch --no-autostart --show-keys --with-fingerprint debian/nimbusos-archive-keyring.gpg
+
+override_dh_auto_clean:
+	rm -rf $(GNUPGHOME) debian/nimbusos-archive-keyring.gpg

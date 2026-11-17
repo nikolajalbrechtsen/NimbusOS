@@ -1,0 +1,35 @@
+#!/usr/bin/make -f
+# =============================================================================
+# debian/rules for nimbusos-docker-keyring
+# =============================================================================
+# What: dearmors Docker's key (docker-archive-keyring.asc, staged here by
+#       tools/build-debs.sh from build/config/archives/docker.key.chroot) into
+#       /usr/share/keyrings/docker-archive-keyring.gpg, after checking that it
+#       holds exactly one primary key with the pinned fingerprint
+#       NIMBUS_DOCKER_KEY_FPR:
+#           9DC8 5822 9FC7 DD38 854A  E2D8 8D81 803C 0EBF CD88
+# Why:  docs/PLAN.md NOTE-03 / NOTE-05. The check is repeated here so a
+#       package with any other key can't be built, even outside build-debs.sh.
+# =============================================================================
+
+include debian/nimbus-build.mk
+
+export GNUPGHOME := $(CURDIR)/debian/gnupghome
+
+%:
+	dh $@
+
+override_dh_auto_build:
+	install -d -m 0700 $(GNUPGHOME)
+	gpg --batch --quiet --dearmor < docker-archive-keyring.asc > debian/docker-archive-keyring.gpg
+	@set -e; \
+	fprs="$$(gpg --batch --no-autostart --with-colons --show-keys debian/docker-archive-keyring.gpg \
+		| awk -F: '$$1 == "pub" { want = 1; next } $$1 == "fpr" && want { print $$10; want = 0 }')"; \
+	if [ "$$fprs" != "$(NIMBUS_DOCKER_KEY_FPR)" ]; then \
+		echo "docker-archive-keyring.asc must hold exactly Docker's key $(NIMBUS_DOCKER_KEY_FPR); found: $$fprs" >&2; \
+		exit 1; \
+	fi; \
+	echo "Docker key OK: $$fprs"
+
+override_dh_auto_clean:
+	rm -rf $(GNUPGHOME) debian/docker-archive-keyring.gpg

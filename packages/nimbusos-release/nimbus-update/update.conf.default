@@ -1,0 +1,14 @@
+# NimbusOS update settings
+#
+# Created once by the nimbusos-release package and never overwritten by it.
+# Change it from the Control Center (Updates page) or with
+#   nimbus-update channel stable|beta
+#   nimbus-update policy automatic|notify|off
+#
+# CHANNEL  stable: tested releases only; beta: also pre-releases
+# POLICY   automatic: install NimbusOS updates daily
+#          notify:    check daily and show them, don't install
+#          off:       no automatic checks
+# Debian security updates are installed daily in every case.
+CHANNEL=stable
+POLICY=automatic

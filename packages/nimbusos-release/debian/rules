@@ -1,0 +1,24 @@
+#!/usr/bin/make -f
+# =============================================================================
+# debian/rules for nimbusos-release
+# =============================================================================
+# What: standard debhelper build. Templates (os-release, the APT source, the
+#       pinning files, nimbus-update's build values) were already filled in
+#       from build/nimbus.conf by tools/build-debs.sh when it staged this
+#       package (docs/PLAN.md NOTE-49), so nothing is generated here.
+# Why:  timers are enabled and started on install. The Flathub unit is
+#       enabled but not started during installation, because it needs the
+#       network and would make dpkg wait for a download; it runs at the next
+#       boot (and once at image build time, hook 0100).
+# =============================================================================
+
+%:
+	dh $@
+
+override_dh_installsystemd:
+	dh_installsystemd --no-start nimbus-flathub-setup.service
+	dh_installsystemd nimbus-update-check.timer nimbus-update-auto.timer
+
+# tests/ checks the pinning and nimbus-update in CI (needs network-free apt
+# repositories and a container), not during the package build.
+override_dh_auto_test:

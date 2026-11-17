@@ -33,6 +33,10 @@
 #                         throwaway key so CI can build (docs/PLAN.md NOTE-44).
 #                         Packages built this way must never be published or
 #                         put into an image; build.sh and release.yml refuse them.
+#   --only PKG[,PKG...]   build only these packages (development and tests).
+#                         The seven-package set check is skipped, so the
+#                         result must never be published; release.yml and
+#                         build.sh never pass it.
 #   -h, --help            show this help
 # =============================================================================
 set -Eeuo pipefail
@@ -49,6 +53,7 @@ opt_tag=""
 opt_build_deps=""
 opt_lintian=""
 opt_allow_test_key=""
+opt_only=""
 NIMBUS_TEST_KEY=""      # "1" when a throwaway key was generated (recorded in nimbus-build.env)
 staging=""
 test_key_file=""
@@ -185,6 +190,12 @@ stage_package() {
 	esac
 
 	write_build_values "$dst"
+	# File modes by content, not by the host file system (see common.sh).
+	nimbus_normalize_modes "$dst"
+	# Fill in @NIMBUS_*@ tokens everywhere in the staged copy: debian/control
+	# (Maintainer, Homepage), debian/changelog trailers, debian/copyright, and
+	# payload templates such as os-release and the APT source (NOTE-49).
+	nimbus_render_tree "$dst"
 	update_changelog "$dst" "$pkg"
 }
 
@@ -220,8 +231,8 @@ build_package() {
 }
 
 main() {
-	local pkg ver_env version
-	local -a keys built deb_version_args=()
+	local pkg ver_env version deb
+	local -a keys built deb_version_args=() selected=()
 
 	while (($#)); do
 		case "$1" in
@@ -230,6 +241,7 @@ main() {
 			--install-build-deps) opt_build_deps=1; shift ;;
 			--lintian)            opt_lintian=1; shift ;;
 			--allow-test-key)     opt_allow_test_key=1; shift ;;
+			--only)               [[ $# -ge 2 ]] || die "--only needs a value"; opt_only="$2"; shift 2 ;;
 			-h|--help)            usage; exit 0 ;;
 			*) die "Unknown option: $1 (see --help)" ;;
 		esac
@@ -239,6 +251,18 @@ main() {
 	export LC_ALL=C.UTF-8
 	opt_out="$(nimbus_path "${opt_out:-$NIMBUS_DEBS_DIR}")"
 	staging="$(nimbus_path "$NIMBUS_STAGING_DIR")"
+
+	# Which packages to build (all seven unless --only).
+	if [[ -n "$opt_only" ]]; then
+		IFS=',' read -r -a selected <<<"$opt_only"
+		for pkg in "${selected[@]}"; do
+			[[ " ${NIMBUS_PACKAGES[*]} " == *" $pkg "* ]] \
+				|| die "--only: '$pkg' is not a NimbusOS package (${NIMBUS_PACKAGES[*]})."
+		done
+		warn "--only: building ${selected[*]} only. Such a partial set must never be published."
+	else
+		selected=("${NIMBUS_PACKAGES[@]}")
+	fi
 
 	# Host tools.
 	if [[ -n "$opt_build_deps" ]]; then
@@ -264,6 +288,10 @@ main() {
 	ver_env="$("$NIMBUS_REPO_ROOT/tools/deb-version.sh" --env "${deb_version_args[@]}")"
 	eval "$ver_env"
 	export SOURCE_DATE_EPOCH
+	# os-release(5) allows only 0-9, a-z, ".", "_" and "-" in VERSION_ID, so a
+	# development version such as 0.2.0+git20261117.5.gabc1234 is written as
+	# 0.2.0.git20261117.5.gabc1234 there.
+	NIMBUS_OS_VERSION_ID="$(printf '%s' "${NIMBUS_DISPLAY_VERSION,,}" | tr -c '0-9a-z._-' '.')"
 	step "Building ${NIMBUS_NAME} packages $NIMBUS_VERSION (channel $NIMBUS_CHANNEL, commit $NIMBUS_GIT_COMMIT)"
 
 	# Maintainer identity (docs/PLAN.md A11).
@@ -283,26 +311,33 @@ main() {
 
 	# Clean outputs of earlier runs, then stage and build every package.
 	mkdir -p -- "$opt_out" "$staging"
-	for pkg in "${NIMBUS_PACKAGES[@]}"; do
+	for pkg in "${selected[@]}"; do
 		rm -f -- "$opt_out/${pkg}_"*.deb "$staging/${pkg}_"*.deb "$staging/${pkg}_"*.buildinfo "$staging/${pkg}_"*.changes
 	done
-	for pkg in "${NIMBUS_PACKAGES[@]}"; do
+	for pkg in "${selected[@]}"; do
 		step "$pkg"
 		stage_package "$pkg"
 		build_package "$pkg"
 	done
 
-	# The result must be one consistent set.
-	version="$(nimbus_check_deb_set "$opt_out")"
-	[[ "$version" == "$NIMBUS_VERSION" ]] || die "Built packages have version $version, expected $NIMBUS_VERSION."
-	if [[ -z "$NIMBUS_TEST_KEY" ]]; then
-		nimbus_check_archive_keyring_deb "$(find "$opt_out" -maxdepth 1 -name 'nimbusos-archive-keyring_*.deb' -print -quit)"
+	# The result must be one consistent set (each package checked on its own
+	# with --only).
+	if [[ -z "$opt_only" ]]; then
+		version="$(nimbus_check_deb_set "$opt_out")"
+		[[ "$version" == "$NIMBUS_VERSION" ]] || die "Built packages have version $version, expected $NIMBUS_VERSION."
 	fi
-	nimbus_check_docker_keyring_deb "$(find "$opt_out" -maxdepth 1 -name 'nimbusos-docker-keyring_*.deb' -print -quit)"
+	deb="$(find "$opt_out" -maxdepth 1 -name "nimbusos-archive-keyring_${NIMBUS_VERSION}_*.deb" -print -quit)"
+	if [[ -n "$deb" && -z "$NIMBUS_TEST_KEY" ]]; then
+		nimbus_check_archive_keyring_deb "$deb"
+	fi
+	deb="$(find "$opt_out" -maxdepth 1 -name "nimbusos-docker-keyring_${NIMBUS_VERSION}_*.deb" -print -quit)"
+	if [[ -n "$deb" ]]; then
+		nimbus_check_docker_keyring_deb "$deb"
+	fi
 
 	if [[ -n "$opt_lintian" ]]; then
 		step "lintian"
-		mapfile -t built < <(for pkg in "${NIMBUS_PACKAGES[@]}"; do
+		mapfile -t built < <(for pkg in "${selected[@]}"; do
 			find "$opt_out" -maxdepth 1 -name "${pkg}_${NIMBUS_VERSION}_*.deb"
 		done)
 		# .debs, not .changes: suite names such as "beta" are not Debian
@@ -314,7 +349,7 @@ main() {
 	printf '%s\n' "$ver_env" "NIMBUS_TEST_KEY=${NIMBUS_TEST_KEY}" >"$opt_out/nimbus-version.env"
 
 	step "Done: $NIMBUS_VERSION"
-	for pkg in "${NIMBUS_PACKAGES[@]}"; do
+	for pkg in "${selected[@]}"; do
 		find "$opt_out" -maxdepth 1 -name "${pkg}_${NIMBUS_VERSION}_*.deb" -printf '  %f\n' >&2
 	done
 	if [[ -n "$NIMBUS_TEST_KEY" ]]; then

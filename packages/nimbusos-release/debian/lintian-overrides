@@ -1,0 +1,22 @@
+# lintian overrides for nimbusos-release, each with its justification
+# (spec 4.1: "lintian-clean, or justify each override").
+
+# This is the distribution's own release package: connecting every
+# installed system to the NimbusOS APT repository is its purpose (spec 4.1,
+# "nimbusos-release ... the APT source /etc/apt/sources.list.d/nimbusos.sources").
+# The file is a conffile, so local changes are kept on upgrade.
+nimbusos-release: package-installs-apt-sources [etc/apt/sources.list.d/nimbusos.sources]
+
+# The pinning is the safety mechanism the spec requires (4.2): it limits the
+# NimbusOS and Docker repositories to their own packages so neither can ever
+# replace a Debian package. It restricts third-party sources; it never raises
+# a priority above Debian's. Both files are conffiles.
+nimbusos-release: package-installs-apt-preferences [etc/apt/preferences.d/nimbusos.pref]
+nimbusos-release: package-installs-apt-preferences [etc/apt/preferences.d/nimbusos-docker.pref]
+
+# nimbus-update does not read dpkg's database. It only probes
+# /var/lib/dpkg/lock-frontend (and apt's lists lock) without waiting, which
+# is the documented locking interface for package frontends, so that the
+# "Automatic" policy backs off while apt, dpkg or unattended-upgrades runs
+# (docs/PLAN.md NOTE-34).
+nimbusos-release: uses-dpkg-database-directly [usr/bin/nimbus-update]

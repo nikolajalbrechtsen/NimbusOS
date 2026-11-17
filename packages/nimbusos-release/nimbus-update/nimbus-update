@@ -1,0 +1,855 @@
+#!/usr/bin/python3
+# =============================================================================
+# nimbus-update — NimbusOS update tool
+# =============================================================================
+# What: one place for all update logic on an installed NimbusOS system:
+#         status    what is installed, which channel and policy, last check
+#         check     refresh package lists, explain any failure, list pending
+#                   updates (Security / NimbusOS / Debian), fetch the signed
+#                   release notes, write /var/lib/nimbusos/update-status.json
+#         install   apt-get update + full-upgrade, non-interactive, keeping
+#                   local configuration files (used by "Install updates")
+#         auto      the "Automatic" policy: upgrade NimbusOS's own packages,
+#                   pulling in new dependencies (nimbus-update-auto.timer)
+#         channel   switch between the stable and beta channels
+#         policy    automatic | notify | off
+#         history   past apt runs, parsed from /var/log/apt/history.log
+#       --json makes every command print one JSON document (for nimbus-privd).
+#
+# Why:  spec section 4.4 and docs/PLAN.md NOTE-33, NOTE-34, NOTE-35, NOTE-38.
+#       The Control Center's privileged helper calls this tool instead of
+#       containing its own apt logic; administrators can use it directly.
+#       Python standard library plus python3-apt only.
+#
+# Exit status: 0 success, 1 failure, 2 usage error, 75 busy (another apt or
+#       update run holds a lock; the systemd unit retries later).
+#
+# Build values below are filled in from build/nimbus.conf when the package is
+# built (tools/build-debs.sh); in the source they are placeholder tokens.
+# Paths are module globals read at call time (never bound as default
+# arguments), so tests can point them at a temporary directory.
+# =============================================================================
+
+import argparse
+import contextlib
+import datetime
+import errno
+import fcntl
+import glob
+import gzip
+import json
+import os
+import re
+import shlex
+import subprocess
+import sys
+import tempfile
+import urllib.error
+import urllib.request
+
+# --- Build values ------------------------------------------------------------
+NIMBUS_NAME = "@NIMBUS_NAME@"
+APT_URL = "@NIMBUS_APT_URL@"
+APT_HOST = "@NIMBUS_APT_HOST@"
+APT_ORIGIN = "@NIMBUS_APT_ORIGIN@"
+APT_COMPONENT = "@NIMBUS_APT_COMPONENT@"
+DOCKER_APT_HOST = "@NIMBUS_DOCKER_APT_HOST@"
+RELEASES_URL = "@NIMBUS_RELEASES_JSON_URL@"
+ARCHIVE_KEYRING = "@NIMBUS_ARCHIVE_KEYRING_PATH@"
+BUG_REPORT_URL = "@NIMBUS_BUG_REPORT_URL@"
+
+# --- Paths -------------------------------------------------------------------
+CONF_PATH = "/etc/nimbusos/update.conf"
+CONF_DEFAULT = "/usr/share/nimbusos-release/update.conf.default"
+STATE_DIR = "/var/lib/nimbusos"
+STATUS_PATH = STATE_DIR + "/update-status.json"
+RELEASES_CACHE = STATE_DIR + "/releases.json"
+BETA_SOURCES = "/etc/apt/sources.list.d/nimbusos-beta.sources"
+OS_RELEASE = "/etc/os-release"
+REBOOT_REQUIRED = "/run/reboot-required"
+REBOOT_REQUIRED_PKGS = "/run/reboot-required.pkgs"
+LOCK_PATH = "/run/nimbus-update.lock"
+UU_LOCK = "/var/run/unattended-upgrades.lock"      # unattended-upgrades' own lock
+DPKG_FRONTEND_LOCK = "/var/lib/dpkg/lock-frontend"
+APT_LISTS_LOCK = "/var/lib/apt/lists/lock"
+HISTORY_LOG = "/var/log/apt/history.log"
+
+CHANNELS = ("stable", "beta")
+POLICIES = ("automatic", "notify", "off")
+EX_BUSY = 75                                      # sysexits.h EX_TEMPFAIL
+STATUS_SCHEMA = 1
+HTTP_TIMEOUT = 30
+
+# Messages are matched in English, so apt runs with LC_ALL=C.UTF-8.
+APT_ENV_BASE = {
+    "PATH": "/usr/sbin:/usr/bin:/sbin:/bin",
+    "LC_ALL": "C.UTF-8",
+    "LANG": "C.UTF-8",
+    "DEBIAN_FRONTEND": "noninteractive",
+    "APT_LISTCHANGES_FRONTEND": "none",
+    # dpkg's --force-confold doesn't reach files managed by ucf (Samba's
+    # smb.conf, for example); this does (docs/PLAN.md NOTE-23).
+    "UCF_FORCE_CONFFOLD": "1",
+}
+APT_KEEP_CONFIG = [
+    "-o", "Dpkg::Options::=--force-confdef",
+    "-o", "Dpkg::Options::=--force-confold",
+]
+
+BETA_SOURCES_TEXT = """\
+# NimbusOS beta channel
+#
+# Written by nimbus-update because the Beta channel is selected, and removed
+# again when Stable is selected. Do not edit; run: nimbus-update channel stable|beta
+Types: deb
+URIs: {url}/
+Suites: beta
+Components: {component}
+Signed-By: {keyring}
+"""
+
+
+# Progress output (apt's own lines and our notes). With --json it goes to
+# stderr so stdout carries exactly one JSON document.
+LOG_STREAM = sys.stdout
+
+
+def say(text):
+    LOG_STREAM.write(text + "\n")
+    LOG_STREAM.flush()
+
+
+class Busy(Exception):
+    """Another apt, dpkg, unattended-upgrades or nimbus-update run is active."""
+
+
+class UsageError(Exception):
+    """Wrong arguments or wrong environment (for example: not root)."""
+
+
+# =============================================================================
+# Small helpers
+# =============================================================================
+
+def now_utc():
+    return datetime.datetime.now(datetime.timezone.utc).replace(microsecond=0)
+
+
+def iso(ts):
+    return ts.isoformat().replace("+00:00", "Z")
+
+
+def require_root():
+    if os.geteuid() != 0:
+        raise UsageError("this command must run as root (try: sudo nimbus-update ...)")
+
+
+def atomic_write(path, text, mode=0o644):
+    """Write PATH completely or not at all: temp file, fsync, rename."""
+    directory = os.path.dirname(path) or "."
+    os.makedirs(directory, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=directory, prefix=".nimbus-update.")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(text)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.chmod(tmp, mode)
+        os.replace(tmp, path)
+    except BaseException:
+        with contextlib.suppress(FileNotFoundError):
+            os.unlink(tmp)
+        raise
+
+
+@contextlib.contextmanager
+def file_lock(path, blocking=False):
+    """Hold an fcntl write lock on PATH (the same kind apt, dpkg and
+    unattended-upgrades use, so the locks are mutually exclusive)."""
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o640)
+    try:
+        try:
+            fcntl.lockf(fd, fcntl.LOCK_EX | (0 if blocking else fcntl.LOCK_NB))
+        except OSError as exc:
+            if exc.errno in (errno.EACCES, errno.EAGAIN):
+                raise Busy(path) from exc
+            raise
+        yield
+    finally:
+        os.close(fd)
+
+
+def lock_is_free(path):
+    """True if nobody holds PATH right now (checked without waiting)."""
+    if not os.path.exists(path):
+        return True
+    try:
+        with file_lock(path, blocking=False):
+            return True
+    except Busy:
+        return False
+
+
+def read_os_release(path=None):
+    values = {}
+    try:
+        with open(path or OS_RELEASE, encoding="utf-8") as handle:
+            for line in handle:
+                line = line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                key, _, value = line.partition("=")
+                parts = shlex.split(value) if value else [""]
+                values[key.strip()] = parts[0] if parts else ""
+    except FileNotFoundError:
+        pass
+    return values
+
+
+# =============================================================================
+# /etc/nimbusos/update.conf
+# =============================================================================
+
+def read_conf(path=None):
+    """CHANNEL and POLICY; unknown or invalid values fall back to the defaults."""
+    conf = {"CHANNEL": "stable", "POLICY": "automatic"}
+    try:
+        with open(path or CONF_PATH, encoding="utf-8") as handle:
+            lines = handle.read().splitlines()
+    except FileNotFoundError:
+        return conf
+    for line in lines:
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        key, value = key.strip(), value.strip().strip("\"'")
+        if key == "CHANNEL" and value in CHANNELS:
+            conf[key] = value
+        elif key == "POLICY" and value in POLICIES:
+            conf[key] = value
+    return conf
+
+
+def write_conf_value(key, value, path=None, default_path=None):
+    """Set KEY=VALUE, keeping every other line (comments included)."""
+    path = path or CONF_PATH
+    default_path = default_path or CONF_DEFAULT
+    try:
+        with open(path, encoding="utf-8") as handle:
+            lines = handle.read().splitlines()
+    except FileNotFoundError:
+        try:
+            with open(default_path, encoding="utf-8") as handle:
+                lines = handle.read().splitlines()
+        except FileNotFoundError:
+            lines = []
+    pattern = re.compile(r"^\s*" + re.escape(key) + r"\s*=")
+    replaced = False
+    for index, line in enumerate(lines):
+        if pattern.match(line):
+            lines[index] = f"{key}={value}"
+            replaced = True
+    if not replaced:
+        lines.append(f"{key}={value}")
+    atomic_write(path, "\n".join(lines) + "\n")
+
+
+def beta_sources_text():
+    return BETA_SOURCES_TEXT.format(url=APT_URL, component=APT_COMPONENT, keyring=ARCHIVE_KEYRING)
+
+
+# =============================================================================
+# apt-get update and what its errors mean
+# =============================================================================
+
+# Order matters: the first matching class wins. apt 3 (Trixie) reports
+# signature problems through sqv ("OpenPGP signature verification failed",
+# "Missing key"); older wording (NO_PUBKEY, BADSIG) is kept as well.
+ERROR_CLASSES = (
+    ("signature", re.compile(
+        r"OpenPGP signature verification failed|Missing key|NO_PUBKEY|BADSIG|EXPKEYSIG|REVKEYSIG"
+        r"|signatures were invalid|signatures couldn't be verified|is not signed|not bound", re.I)),
+    ("expired", re.compile(r"\bis expired\b|is not valid yet|invalid since", re.I)),
+    ("tls", re.compile(
+        r"Certificate verification failed|certificate verify failed|server certificate"
+        r"|TLS handshake|SSL connection|GnuTLS", re.I)),
+    ("dns", re.compile(r"Temporary failure resolving|Could not resolve|Name or service not known", re.I)),
+    ("unreachable", re.compile(
+        r"Could not connect|Connection (timed out|refused|failed)|Unable to connect|Network is unreachable"
+        r"|\b40[34]\s+Not Found|\b404\b|does not have a Release file|Failed to fetch", re.I)),
+)
+
+HINTS = {
+    "signature": (
+        "The {what} could not be verified, so apt ignored it and nothing from it will be installed. "
+        "Make sure the keyring package is current (sudo apt install --reinstall {keyring_pkg}). "
+        "If this persists, do not trust that repository and report it at {bug}."
+    ),
+    "expired": (
+        "The {what} metadata has expired (or the system clock is far ahead). "
+        "Check that the date and time are correct. If they are, the repository has not been "
+        "re-signed in time; it usually is within a day. Report it at {bug} if this persists."
+    ),
+    "tls": (
+        "The secure connection to {host} failed. Check that the date and time are correct and "
+        "that no proxy or filter intercepts HTTPS, then try again."
+    ),
+    "dns": (
+        "The name {host} could not be resolved. Check the network connection and DNS settings, "
+        "then try again."
+    ),
+    "unreachable": (
+        "{host} could not be reached. Check the network connection; if only NimbusOS is affected, "
+        "GitHub Pages may be down for a moment. Try again later."
+    ),
+    "other": "apt reported a problem with {host}: see the message. Running 'sudo apt-get update' shows the details.",
+}
+
+URL_RE = re.compile(r"(https?|file|cdrom)://([^/\s:]+)[^\s]*")
+
+
+def source_of(host):
+    if host == APT_HOST:
+        return "nimbusos"
+    if host == DOCKER_APT_HOST:
+        return "docker"
+    return "debian"
+
+
+def classify_apt_output(lines):
+    """Turn apt-get update output into a list of error dicts.
+
+    Each "W:"/"E:" line and each "Err:" block (the indented lines after it)
+    becomes one entry with: source (nimbusos/debian/docker), kind
+    (signature/expired/tls/dns/unreachable/other), host, message and hint.
+    Repeated reports of the same kind for the same host are merged.
+    """
+    blocks = []
+    current = None
+    for raw in lines:
+        line = raw.rstrip("\n")
+        if line.startswith("Err:"):
+            current = [line]
+            blocks.append(current)
+        elif current is not None and line.startswith(" "):
+            current.append(line.strip())
+        else:
+            current = None
+            if line.startswith(("W:", "E:")):
+                blocks.append([line])
+    errors = []
+    seen = set()
+    for block in blocks:
+        text = " ".join(block)
+        if text.startswith("W:") and not any(rx.search(text) for _, rx in ERROR_CLASSES):
+            continue                         # harmless warnings (e.g. duplicate sources)
+        if "Some index files failed to download" in text:
+            continue                         # a summary of errors reported above
+        match = URL_RE.search(text)
+        host = match.group(2) if match else ""
+        kind = next((name for name, rx in ERROR_CLASSES if rx.search(text)), "other")
+        source = source_of(host) if host else "debian"
+        key = (source, kind, host)
+        if key in seen:
+            continue
+        seen.add(key)
+        what = {"nimbusos": "NimbusOS repository", "docker": "Docker repository"}.get(source, "Debian repository")
+        keyring_pkg = {"nimbusos": "nimbusos-archive-keyring", "docker": "nimbusos-docker-keyring"}.get(
+            source, "debian-archive-keyring")
+        errors.append({
+            "source": source,
+            "kind": kind,
+            "host": host,
+            "message": text[:500],
+            "hint": HINTS[kind].format(what=what, host=host or "the repository", bug=BUG_REPORT_URL,
+                                       keyring_pkg=keyring_pkg),
+        })
+    return errors
+
+
+def run_streaming(argv, env):
+    """Run ARGV, echo its output line by line (journal / terminal), return
+    (exit status, output lines)."""
+    lines = []
+    with subprocess.Popen(argv, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                          text=True, encoding="utf-8", errors="replace") as proc:
+        for line in proc.stdout:
+            lines.append(line)
+            LOG_STREAM.write(line)
+            LOG_STREAM.flush()
+        proc.wait()
+    return proc.returncode, lines
+
+
+def apt_env():
+    env = dict(APT_ENV_BASE)
+    for name in ("http_proxy", "https_proxy", "no_proxy", "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY"):
+        if name in os.environ:
+            env[name] = os.environ[name]
+    return env
+
+
+def apt_update(lock_timeout):
+    status, lines = run_streaming(
+        ["apt-get", "update", "-o", f"DPkg::Lock::Timeout={lock_timeout}"], apt_env())
+    errors = classify_apt_output(lines)
+    if status != 0 and not errors:
+        errors.append({"source": "debian", "kind": "other", "host": "", "message": "".join(lines[-5:])[:500],
+                       "hint": "apt-get update failed; run 'sudo apt-get update' to see why."})
+    return errors
+
+
+# =============================================================================
+# Pending updates (python3-apt)
+# =============================================================================
+
+def classify_origin(origins):
+    """security / nimbusos / debian for a candidate version's origins."""
+    if any(o.label == "Debian-Security" for o in origins):
+        return "security"
+    if any(o.site == APT_HOST or o.origin == APT_ORIGIN for o in origins):
+        return "nimbusos"
+    return "debian"
+
+
+def pending_updates():
+    """Packages a full upgrade would install or upgrade, grouped."""
+    import apt   # python3-apt; imported here so the rest works (and tests run) without it
+
+    cache = apt.Cache()
+    cache.upgrade(dist_upgrade=True)
+    groups = {"security": [], "nimbusos": [], "debian": []}
+    removals = []
+    for pkg in cache.get_changes():
+        if pkg.marked_delete:
+            removals.append(pkg.name)
+            continue
+        candidate = pkg.candidate
+        if candidate is None:
+            continue
+        origins = list(candidate.origins)
+        groups[classify_origin(origins)].append({
+            "name": pkg.name,
+            "from": pkg.installed.version if pkg.installed else None,
+            "to": candidate.version,
+            "origin": origins[0].origin if origins else "",
+            "new": not pkg.is_installed,
+        })
+    for items in groups.values():
+        items.sort(key=lambda item: item["name"])
+    return groups, sorted(removals)
+
+
+def installed_nimbus_packages():
+    import apt
+
+    cache = apt.Cache()
+    return sorted(pkg.name for pkg in cache
+                  if pkg.is_installed and (pkg.name.startswith("nimbus-") or pkg.name.startswith("nimbusos-")))
+
+
+# =============================================================================
+# Signed release notes (releases.json + releases.json.sig, NOTE-38)
+# =============================================================================
+
+def http_get(url):
+    request = urllib.request.Request(url, headers={"User-Agent": "nimbus-update"})
+    with urllib.request.urlopen(request, timeout=HTTP_TIMEOUT) as response:
+        return response.read()
+
+
+def verify_detached(data_path, sig_path, keyring=None):
+    """gpgv against the archive keyring; returns (ok, message)."""
+    result = subprocess.run(["gpgv", "--keyring", keyring or ARCHIVE_KEYRING, sig_path, data_path],
+                            capture_output=True, text=True, env={"PATH": APT_ENV_BASE["PATH"], "LC_ALL": "C.UTF-8"})
+    return result.returncode == 0, (result.stderr or result.stdout).strip()
+
+
+def fetch_releases():
+    """Download, verify and cache releases.json. Returns (data, error)."""
+    try:
+        data = http_get(RELEASES_URL)
+        signature = http_get(RELEASES_URL + ".sig")
+    except (urllib.error.URLError, OSError) as exc:
+        return load_cached_releases(), f"Could not download the release notes: {exc}"
+    with tempfile.TemporaryDirectory(prefix="nimbus-update.") as tmp:
+        data_path = os.path.join(tmp, "releases.json")
+        sig_path = data_path + ".sig"
+        with open(data_path, "wb") as handle:
+            handle.write(data)
+        with open(sig_path, "wb") as handle:
+            handle.write(signature)
+        ok, message = verify_detached(data_path, sig_path)
+        if not ok:
+            return load_cached_releases(), (
+                "The release notes are not signed by the NimbusOS archive key and were ignored. "
+                f"gpgv: {message}")
+    try:
+        parsed = json.loads(data.decode("utf-8"))
+        if not isinstance(parsed.get("releases"), list):
+            raise ValueError("no releases list")
+    except (ValueError, UnicodeDecodeError) as exc:
+        return load_cached_releases(), f"The release notes could not be read: {exc}"
+    atomic_write(RELEASES_CACHE, json.dumps(parsed, indent=1) + "\n")
+    return parsed, None
+
+
+def load_cached_releases():
+    try:
+        with open(RELEASES_CACHE, encoding="utf-8") as handle:
+            return json.load(handle)
+    except (FileNotFoundError, ValueError):
+        return None
+
+
+def latest_release(releases, channel, compare):
+    """Newest release for CHANNEL: stable sees stable releases only, beta sees
+    both. COMPARE is a Debian version comparison (apt_pkg.version_compare)."""
+    best = None
+    for entry in (releases or {}).get("releases", []):
+        if not isinstance(entry, dict) or "deb_version" not in entry:
+            continue
+        if channel == "stable" and entry.get("channel") != "stable":
+            continue
+        if best is None or compare(entry["deb_version"], best["deb_version"]) > 0:
+            best = entry
+    return best
+
+
+def debian_compare(a, b):
+    import apt_pkg
+
+    apt_pkg.init_system()
+    return apt_pkg.version_compare(a, b)
+
+
+# =============================================================================
+# Status
+# =============================================================================
+
+def reboot_state():
+    required = os.path.exists(REBOOT_REQUIRED)
+    packages = []
+    if required:
+        with contextlib.suppress(FileNotFoundError):
+            with open(REBOOT_REQUIRED_PKGS, encoding="utf-8") as handle:
+                packages = sorted({line.strip() for line in handle if line.strip()})
+    return required, packages
+
+
+def installed_release():
+    values = read_os_release()
+    return {
+        "name": values.get("NAME", NIMBUS_NAME),
+        "version": values.get("VERSION_ID", ""),
+        "pretty": values.get("PRETTY_NAME", ""),
+        "channel": values.get("NIMBUSOS_CHANNEL", ""),
+        "deb_version": values.get("NIMBUSOS_DEB_VERSION", ""),
+    }
+
+
+def read_status():
+    try:
+        with open(STATUS_PATH, encoding="utf-8") as handle:
+            return json.load(handle)
+    except (FileNotFoundError, ValueError):
+        return None
+
+
+def build_status(errors, groups, removals, releases, releases_error, checked_at):
+    conf = read_conf()
+    required, reboot_packages = reboot_state()
+    installed = installed_release()
+    latest = None
+    if releases:
+        latest = latest_release(releases, conf["CHANNEL"], debian_compare)
+    return {
+        "schema": STATUS_SCHEMA,
+        "checked_at": iso(checked_at) if checked_at else None,
+        "ok": not errors,
+        "errors": errors,
+        "pending": groups,
+        "counts": {name: len(items) for name, items in groups.items()},
+        "removals": removals,
+        "installed": installed,
+        "latest": latest,
+        "update_available": bool(latest and installed["deb_version"]
+                                 and debian_compare(latest["deb_version"], installed["deb_version"]) > 0),
+        "releases_error": releases_error,
+        "reboot_required": required,
+        "reboot_packages": reboot_packages,
+        "channel": conf["CHANNEL"],
+        "policy": conf["POLICY"],
+    }
+
+
+def refresh_status(errors, checked_at):
+    """Recompute pending updates (no download) and store the status file."""
+    groups, removals = pending_updates()
+    releases, releases_error = fetch_releases()
+    status = build_status(errors, groups, removals, releases, releases_error, checked_at)
+    atomic_write(STATUS_PATH, json.dumps(status, indent=1) + "\n")
+    return status
+
+
+# =============================================================================
+# Commands
+# =============================================================================
+
+def emit(args, document, text):
+    if args.json:
+        json.dump(document, sys.stdout, indent=1)
+        sys.stdout.write("\n")
+    else:
+        print(text)
+
+
+def describe(status):
+    lines = []
+    installed = status.get("installed", {})
+    lines.append(f"{installed.get('pretty') or NIMBUS_NAME}, channel {status.get('channel')}, "
+                 f"policy {status.get('policy')}")
+    lines.append(f"Last check: {status.get('checked_at') or 'never'}")
+    for error in status.get("errors", []):
+        lines.append(f"Problem ({error['source']}, {error['kind']}): {error['hint']}")
+    counts = status.get("counts", {})
+    lines.append("Pending: {security} security, {nimbusos} NimbusOS, {debian} Debian".format(
+        security=counts.get("security", 0), nimbusos=counts.get("nimbusos", 0), debian=counts.get("debian", 0)))
+    latest = status.get("latest")
+    if status.get("update_available") and latest:
+        lines.append(f"New NimbusOS release: {latest.get('version')} ({latest.get('channel')})")
+    if status.get("releases_error"):
+        lines.append(status["releases_error"])
+    if status.get("reboot_required"):
+        lines.append("A restart is required to finish installing updates.")
+    return "\n".join(lines)
+
+
+def cmd_status(args):
+    status = read_status() or build_status([], {"security": [], "nimbusos": [], "debian": []}, [], None, None, None)
+    # Live values may have changed since the last check.
+    conf = read_conf()
+    status["channel"], status["policy"] = conf["CHANNEL"], conf["POLICY"]
+    status["installed"] = installed_release()
+    status["reboot_required"], status["reboot_packages"] = reboot_state()
+    emit(args, status, describe(status))
+    return 0
+
+
+def cmd_check(args):
+    require_root()
+    conf = read_conf()
+    if args.scheduled and conf["POLICY"] == "off":
+        emit(args, {"skipped": True, "policy": "off"}, "Update policy is Off; no scheduled check.")
+        return 0
+    with file_lock(LOCK_PATH):
+        errors = apt_update(lock_timeout=120)
+        status = refresh_status(errors, now_utc())
+    emit(args, status, describe(status))
+    if args.scheduled:
+        return 0          # the status file records problems; the timer must not "fail"
+    return 0 if status["ok"] else 1
+
+
+def cmd_install(args):
+    require_root()
+    with file_lock(LOCK_PATH):
+        say("==> apt-get update")
+        errors = apt_update(lock_timeout=600)
+        if errors:
+            say("Some sources could not be refreshed; updates from them are skipped:")
+            for error in errors:
+                say(f"  - {error['hint']}")
+        say("==> apt-get full-upgrade")
+        status_code, _ = run_streaming(
+            ["apt-get", "-y", "-q", "full-upgrade",
+             "-o", "DPkg::Lock::Timeout=600", "-o", "APT::Status-Fd=1", *APT_KEEP_CONFIG], apt_env())
+        status = refresh_status(errors, now_utc())
+    if status_code == 0:
+        message = "Updates installed."
+        if status["reboot_required"]:
+            message += " Restart the computer to finish."
+    else:
+        message = f"apt-get full-upgrade failed (exit status {status_code}). The log above says why."
+    emit(args, {"ok": status_code == 0, "exit_status": status_code, "status": status}, message)
+    return 0 if status_code == 0 else 1
+
+
+def cmd_auto(args):
+    """Automatic policy: upgrade the installed NimbusOS packages (and pull in
+    their new dependencies) without waiting for any lock (NOTE-34)."""
+    require_root()
+    conf = read_conf()
+    if conf["POLICY"] != "automatic":
+        say(f"Update policy is {conf['POLICY']}; automatic NimbusOS updates are off.")
+        return 0
+    with file_lock(LOCK_PATH), file_lock(UU_LOCK):
+        for path in (DPKG_FRONTEND_LOCK, APT_LISTS_LOCK):
+            if not lock_is_free(path):
+                raise Busy(path)
+        errors = apt_update(lock_timeout=0)
+        if any(error["source"] == "nimbusos" for error in errors):
+            refresh_status(errors, now_utc())
+            say("The NimbusOS repository could not be refreshed; nothing was installed.")
+            return 1
+        packages = installed_nimbus_packages()
+        if not packages:
+            say("No NimbusOS packages are installed.")
+            return 0
+        # "apt-get install" marks packages as manually installed; remember
+        # which were automatic and restore that afterwards.
+        auto_before = set(subprocess.run(["apt-mark", "showauto", *packages], capture_output=True, text=True,
+                                         env=apt_env()).stdout.split())
+        status_code, _ = run_streaming(
+            ["apt-get", "-y", "-q", "install", "--no-remove",
+             "-o", "DPkg::Lock::Timeout=0", *APT_KEEP_CONFIG, *packages], apt_env())
+        if auto_before:
+            subprocess.run(["apt-mark", "auto", *sorted(auto_before)], capture_output=True, env=apt_env())
+        refresh_status(errors, now_utc())
+    return 0 if status_code == 0 else 1
+
+
+def cmd_channel(args):
+    require_root()
+    write_conf_value("CHANNEL", args.channel)
+    if args.channel == "beta":
+        atomic_write(BETA_SOURCES, beta_sources_text())
+        text = "Beta channel selected: beta versions of NimbusOS will be offered."
+    else:
+        with contextlib.suppress(FileNotFoundError):
+            os.unlink(BETA_SOURCES)
+        text = ("Stable channel selected. Installed beta versions stay until a stable release "
+                "is newer; nothing is downgraded.")
+    if not args.no_check:
+        with file_lock(LOCK_PATH):
+            errors = apt_update(lock_timeout=120)
+            refresh_status(errors, now_utc())
+    emit(args, {"channel": args.channel}, text)
+    return 0
+
+
+def cmd_policy(args):
+    require_root()
+    write_conf_value("POLICY", args.policy)
+    texts = {
+        "automatic": "NimbusOS updates will be installed automatically once a day.",
+        "notify": "NimbusOS updates will be checked daily and shown, but not installed.",
+        "off": "NimbusOS updates will not be checked automatically. 'Check now' still works.",
+    }
+    emit(args, {"policy": args.policy}, texts[args.policy])
+    return 0
+
+
+# --- history ------------------------------------------------------------------
+
+PKG_ENTRY_RE = re.compile(r"([^\s,()]+) \(([^()]*)\)")
+
+
+def parse_history(text):
+    """Entries of an apt history log, oldest first."""
+    entries = []
+    for block in re.split(r"\n\s*\n", text):
+        fields = {}
+        for line in block.strip().splitlines():
+            key, sep, value = line.partition(": ")
+            if sep:
+                fields[key.strip()] = value.strip()
+        if "Start-Date" not in fields:
+            continue
+        entry = {
+            "start": fields.get("Start-Date"),
+            "end": fields.get("End-Date"),
+            "command": fields.get("Commandline", ""),
+            "requested_by": fields.get("Requested-By", ""),
+            "error": fields.get("Error"),
+            "changes": {},
+        }
+        for action in ("Install", "Upgrade", "Downgrade", "Remove", "Purge", "Reinstall"):
+            if action in fields:
+                items = []
+                for name, versions in PKG_ENTRY_RE.findall(fields[action]):
+                    parts = [part.strip() for part in versions.split(",")]
+                    items.append({"name": name.split(":")[0], "versions": [p for p in parts if p != "automatic"],
+                                  "automatic": "automatic" in parts})
+                entry["changes"][action.lower()] = items
+        entries.append(entry)
+    return entries
+
+
+def read_history(limit):
+    paths = sorted(glob.glob(HISTORY_LOG + ".*.gz"),
+                   key=lambda p: int(re.search(r"\.(\d+)\.gz$", p).group(1)) if re.search(r"\.(\d+)\.gz$", p) else 0,
+                   reverse=True)
+    texts = []
+    for path in paths:
+        with contextlib.suppress(OSError, EOFError):
+            with gzip.open(path, "rt", encoding="utf-8", errors="replace") as handle:
+                texts.append(handle.read())
+    with contextlib.suppress(FileNotFoundError):
+        with open(HISTORY_LOG, encoding="utf-8", errors="replace") as handle:
+            texts.append(handle.read())
+    entries = []
+    for text in texts:
+        entries.extend(parse_history(text))
+    entries.reverse()                     # newest first
+    return entries[:limit]
+
+
+def cmd_history(args):
+    entries = read_history(args.limit)
+    lines = []
+    for entry in entries:
+        counts = ", ".join(f"{len(items)} {action}" for action, items in entry["changes"].items())
+        lines.append(f"{entry['start']}  {counts or 'no changes'}  {entry['command']}")
+    emit(args, {"entries": entries}, "\n".join(lines) or "No apt history yet.")
+    return 0
+
+
+# =============================================================================
+# Main
+# =============================================================================
+
+def parser():
+    top = argparse.ArgumentParser(prog="nimbus-update", description="NimbusOS update tool.")
+    top.add_argument("--json", action="store_true", help="print one JSON document")
+    sub = top.add_subparsers(dest="command", required=True)
+    sub.add_parser("status", help="show version, channel, policy and the last check")
+    check = sub.add_parser("check", help="refresh package lists and list pending updates")
+    check.add_argument("--scheduled", action="store_true", help="timer mode: respect policy Off, never fail")
+    sub.add_parser("install", help="install all pending updates")
+    sub.add_parser("auto", help="Automatic policy: upgrade NimbusOS's own packages")
+    channel = sub.add_parser("channel", help="select the stable or beta channel")
+    channel.add_argument("channel", choices=CHANNELS)
+    channel.add_argument("--no-check", action="store_true", help="don't refresh package lists afterwards")
+    policy = sub.add_parser("policy", help="select automatic, notify or off")
+    policy.add_argument("policy", choices=POLICIES)
+    history = sub.add_parser("history", help="list past apt runs")
+    history.add_argument("--limit", type=int, default=50)
+    return top
+
+
+COMMANDS = {
+    "status": cmd_status, "check": cmd_check, "install": cmd_install, "auto": cmd_auto,
+    "channel": cmd_channel, "policy": cmd_policy, "history": cmd_history,
+}
+
+
+def main(argv=None):
+    global LOG_STREAM
+    args = parser().parse_args(argv)
+    LOG_STREAM = sys.stderr if args.json else sys.stdout
+    os.umask(0o022)
+    try:
+        return COMMANDS[args.command](args)
+    except UsageError as exc:
+        print(f"nimbus-update: {exc}", file=sys.stderr)
+        return 2
+    except Busy as exc:
+        print(f"nimbus-update: busy, retrying later ({exc} is held by another update or apt run)", file=sys.stderr)
+        return EX_BUSY
+
+
+if __name__ == "__main__":
+    sys.exit(main())

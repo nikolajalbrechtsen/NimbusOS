@@ -1,0 +1,13 @@
+# NimbusOS APT repository (stable channel)
+#
+# Shipped by the nimbusos-release package. NimbusOS's own packages come from
+# here; Debian packages keep coming from Debian's mirrors. apt verifies every
+# download with the keyring named in Signed-By, and the pinning in
+# /etc/apt/preferences.d/nimbusos.pref lets this repository supply only
+# NimbusOS's own packages. Selecting the Beta channel adds
+# nimbusos-beta.sources next to this file (run: nimbus-update channel beta).
+Types: deb
+URIs: @NIMBUS_APT_URL@/
+Suites: @NIMBUS_APT_DEFAULT_SUITE@
+Components: @NIMBUS_APT_COMPONENT@
+Signed-By: @NIMBUS_ARCHIVE_KEYRING_PATH@

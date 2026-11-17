@@ -1,0 +1,20 @@
+#!/usr/bin/make -f
+# =============================================================================
+# debian/rules for nimbusos-desktop
+# =============================================================================
+# What: fills the ${nimbus:ListDepends} substvar from debian/nimbus-list-depends,
+#       which tools/build-debs.sh generates with tools/gen-desktop-depends.sh
+#       from build/config/package-lists/ when it stages this package.
+# Why:  the image and the metapackage are defined by the same lists, so they
+#       can't drift apart (docs/PLAN.md NOTE-48). The file is generated, not
+#       committed, and it is not a *.substvars file, which dh_clean would delete.
+# =============================================================================
+
+%:
+	dh $@
+
+override_dh_gencontrol:
+	@test -s debian/nimbus-list-depends || { \
+		echo "debian/nimbus-list-depends is missing: build this package with tools/build-debs.sh." >&2; \
+		exit 1; }
+	dh_gencontrol -- "-Vnimbus:ListDepends=$$(cat debian/nimbus-list-depends)"
