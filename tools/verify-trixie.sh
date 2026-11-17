@@ -148,8 +148,9 @@ main() {
 		done
 	done
 	log "${#chroot_lists[@]} chroot lists, ${#binary_lists[@]} binary lists, ${#all_pkgs[@]} distinct packages: format OK."
-	# The metapackage's dependency line must be producible, too.
-	"$NIMBUS_REPO_ROOT/tools/gen-desktop-depends.sh" >/dev/null
+	# The metapackage's Depends and Recommends lines must be producible, too.
+	"$NIMBUS_REPO_ROOT/tools/gen-desktop-depends.sh" --depends >/dev/null
+	"$NIMBUS_REPO_ROOT/tools/gen-desktop-depends.sh" --recommends >/dev/null
 
 	# --- 2. Private APT configuration ------------------------------------------
 	step "2. Trixie package indices (${NIMBUS_BUILD_MIRROR})"

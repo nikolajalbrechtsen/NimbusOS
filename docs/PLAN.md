@@ -35,14 +35,17 @@ NimbusOS/
 │   ├── lib/common.sh                 logging, nimbus.conf loading, version helpers (shared with tools/)
 │   └── config/                       live-build config TEMPLATE; copied to build/work/ for each build
 │       ├── package-lists/
-│       │   ├── 10-base.list.chroot
-│       │   ├── 20-plasma.list.chroot
-│       │   ├── 30-theming-fonts.list.chroot
-│       │   ├── 40-calamares.list.chroot             marked exclude-from-desktop-depends (NOTE-48)
-│       │   ├── 50-docker.list.chroot
-│       │   ├── 60-virtualization.list.chroot
-│       │   ├── 70-storage-nas.list.chroot
-│       │   ├── 90-nimbusos.list.chroot              nimbusos-desktop itself (marked exclude-from-desktop-depends)
+│       │   ├── 10-base.list.chroot                  Depends (NOTE-48: no marker)
+│       │   ├── 15-firmware.list.chroot              Recommends (#! nimbus: desktop-recommends)
+│       │   ├── 20-plasma.list.chroot                Depends: Plasma core by name
+│       │   ├── 25-desktop-extras.list.chroot        Recommends: apps, browsers, Discover, Flatpak, kde-plasma-desktop
+│       │   ├── 30-theming-fonts.list.chroot         Depends
+│       │   ├── 40-calamares.list.chroot             #! nimbus: exclude-from-desktop
+│       │   ├── 50-docker.list.chroot                Depends
+│       │   ├── 60-virtualization.list.chroot        Depends
+│       │   ├── 70-storage-nas.list.chroot           Depends
+│       │   ├── 75-storage-optional.list.chroot      Recommends: snapraid
+│       │   ├── 90-nimbusos.list.chroot              nimbusos-desktop itself (#! nimbus: exclude-from-desktop)
 │       │   ├── 95-installer-pool-bios.list.binary   grub-pc → ISO pool for Calamares' bootloader step
 │       │   ├── 96-installer-pool-uefi.list.binary   grub-efi + signed GRUB/shim → ISO pool
 │       │   └── 97-installer-pool-luks.list.binary   cryptsetup-initramfs, keyutils → ISO pool (encrypted installs)
@@ -113,7 +116,9 @@ NimbusOS/
 │   ├── deb-version.sh                git tag → Debian version (NOTE-32)
 │   ├── gen-desktop-depends.sh        package lists → ${nimbus:ListDepends} substvar (NOTE-48)
 │   ├── verify-trixie.sh              proves every listed package and live-build flag exists in trixie (§7)
-│   ├── dev-shell.sh                  throwaway debian:trixie container (Docker or Podman) with the repo at /src
+│   ├── dev-shell.sh                  throwaway debian:trixie container (Docker or Podman); works in a clone by default
+│   ├── check-file-modes.sh           git file modes must match tools/file-modes.conf (CI)
+│   ├── file-modes.conf               which files must be executable, by role
 │   ├── fetch-docker-key.sh           re-downloads Docker's key and refuses it unless the fingerprint matches
 │   ├── pin-actions.sh                resolves each action's release tag to its commit SHA (NOTE-42)
 │   ├── publish-apt.sh                add packages, prune to 3 versions, index, releases.json, sign (release + refresh)
@@ -240,7 +245,7 @@ Rules applied to all seven: lintian-clean or a justified override; idempotent, u
 - **VMs.** One `getAllDomainStats()` call per tick. CPU % of host = Δ`cpu.time` / (Δt × host threads); CPU % of the VM's own vCPUs is also shown. Memory is `balloon.rss`, falling back to the configured memory.
 - **Storage.** `statvfs` locally. SMART and parity come from privd's hourly cache; the dashboard never triggers a scan.
 - **Attribution.** System & desktop = max(0, total − Docker − VMs), calculated separately for CPU and memory.
-- **Alert rules** (all in `metrics_service.py`): container exited unexpectedly (its stack's desired state is "running"), restart loop (≥ 3 restarts in 5 min, or `Restarting`), unhealthy; VM crashed or paused with reason I/O error; SMART failing, reallocated or pending sectors > 0, temperature over threshold (HDD 50 °C, NVMe 70 °C by default); pool > 90 % full; parity not synced for more than 48 h or more than 10 GB unprotected; a failed unit (`nimbus-*`, `smbd`, `docker`, the libvirt daemons, NOTE-20), checked every 10 s; security updates waiting, a new NimbusOS release, restart required, repository unreachable, or not checked for more than 7 days.
+- **Alert rules** (all in `metrics_service.py`): container exited unexpectedly (its stack's desired state is "running"), restart loop (≥ 3 restarts in 5 min, or `Restarting`), unhealthy; VM crashed or paused with reason I/O error; SMART failing, reallocated or pending sectors > 0, temperature over threshold (HDD 50 °C, NVMe 70 °C by default); pool > 90 % full; parity not synced for more than 48 h or more than 10 GB unprotected; a failed unit (`nimbus-*`, `smbd`, `docker`, the libvirt daemons, NOTE-20), checked every 10 s; security updates waiting, a new NimbusOS release, restart required, repository unreachable, or not checked for more than 7 days; `nimbusos-desktop` not installed (NOTE-48).
 
 ### 4.5 Storage and shares
 
@@ -257,6 +262,7 @@ Rules applied to all seven: lintian-clean or a justified override; idempotent, u
 - `install`: run by privd as a transient unit (`systemd-run --unit=nimbus-update-<id>`) so it survives restarts of the services it upgrades (NOTE-35). `apt-get update` then `apt-get full-upgrade` with `DEBIAN_FRONTEND=noninteractive`, `--force-confdef` and `--force-confold`, `UCF_FORCE_CONFFOLD=1`, and `-o DPkg::Lock::Timeout=…` so it waits for unattended-upgrades instead of colliding with it. The unit's output goes to the journal. privd streams it to the UI drawer, and after a reconnect re-reads it with `journalctl -u nimbus-update-<id>`.
 - Channels: Stable is the packaged `nimbusos.sources`. Beta adds a generated `nimbusos-beta.sources` (same `Signed-By`). See NOTE-33.
 - Policy: unattended-upgrades handles Debian-Security only. NimbusOS updates follow `POLICY` through nimbus-update's own timers (NOTE-34). The system never reboots on its own.
+- If `nimbusos-desktop` is missing, the Updates page warns: "This system no longer receives new NimbusOS software. Reinstall nimbusos-desktop" (from `status.desktop_metapackage_installed`, NOTE-48).
 
 ---
 
@@ -380,7 +386,7 @@ Because live-build only places keys at that fixed `trusted.gpg.d/<name>.asc` pat
 
 **NOTE-35 — Updates run in a transient unit.** Upgrading `nimbus-control` restarts `nimbus-privd`. If apt were a child of privd, that restart would kill dpkg midway. privd therefore starts `nimbus-update install` with `systemd-run` as its own unit (`nimbus-update-<id>`, `SyslogIdentifier=nimbus-update`). All of its output goes to the journal. privd follows it with python3-systemd's journal reader and relays the lines to the UI. After a reconnect or page reload, the Updates page asks privd (`update.log`) for the unit's journal entries and shows the whole log again, finished or not.
 
-**NOTE-36 — os-release.** `base-files` owns `/usr/lib/os-release`, so `nimbusos-release` diverts it (`dpkg-divert --rename`) and ships its own: `NAME="NimbusOS"`, `ID=nimbusos`, `ID_LIKE=debian`, `VERSION_ID`, `VERSION`, and `NIMBUSOS_CHANNEL`, a vendor-prefixed custom field, which os-release(5) allows. It keeps `VERSION_CODENAME=trixie`, because unattended-upgrades, Docker and other tools look up the release by codename. `/etc/os-release` stays base-files' symlink and therefore points to the NimbusOS file.
+**NOTE-36 — os-release.** `base-files` owns `/usr/lib/os-release`, so `nimbusos-release` diverts it (`dpkg-divert --rename`) and ships its own: `NAME="NimbusOS"`, `ID=nimbusos`, `ID_LIKE=debian`, `VERSION_ID`, `VERSION`, and `NIMBUSOS_CHANNEL`, a vendor-prefixed custom field, which os-release(5) allows. It keeps `ID_LIKE=debian` and `VERSION_CODENAME=trixie`, because unattended-upgrades (through `lsb_release`), Docker and other tools look up the release by codename. It adds `DEBIAN_CODENAME=trixie` for third-party scripts that look for the Debian base on derivatives. `/etc/debian_version` stays base-files' own file and isn't touched, and `/etc/os-release` stays base-files' symlink, so it points to the NimbusOS file. `lsb_release -a` therefore reports "Distributor ID: NimbusOS" with "Codename: trixie". `packages/nimbusos-release/tests/os-identity.test.sh` proves that unattended-upgrades, apt, Docker's source and Calamares still resolve the Debian release correctly (§7).
 
 **NOTE-37 — Where release notes come from.** The spec takes release notes from the GitHub Release body, but the release is created in the last step, after `releases.json` has been published. The single source is therefore `docs/release-notes/<tag>.md`, written before tagging. `release.yml` uses that file both as the GitHub Release body and as the notes in `releases.json`, and fails with a clear message if it is missing. A line `Restart-Required: yes` in the file sets `restart_required`.
 
@@ -406,9 +412,25 @@ Because live-build only places keys at that fixed `trusted.gpg.d/<name>.asc` pat
 
 **NOTE-47 — Package build layout.** `packages/nimbus-control` and `packages/nimbus-catalog` contain only `debian/`. `tools/build-debs.sh` stages each package into `_build/src/<pkg>/`, copying `control-center/` or `catalog/` alongside, and builds there. The source trees stay where the spec puts them, and each package still builds from a self-contained directory.
 
-**NOTE-48 — Which lists feed `nimbusos-desktop`.** `nimbusos-desktop` gets its Depends from the package lists at build time, through a substvar, so the lists and the metapackage can't drift apart. Lists containing the line `#! nimbus: exclude-from-desktop-depends` are skipped: Calamares, which removes itself after install (if the metapackage depended on it, removing Calamares would remove the metapackage), and `90-nimbusos` (the metapackage itself). The `*.list.binary` files are never read: they only fill the ISO's package pool, where GRUB for BIOS and for UEFI sit in separate lists because the two conflict and the installer picks one. A package listed twice is an error. The marker line is an ordinary comment as far as live-build is concerned (NOTE-53).
+**NOTE-48 — `nimbusos-desktop`: Depends versus Recommends (revised after review).** `nimbusos-desktop` gets its Depends **and** Recommends from the package lists at build time, through two substvars, so the lists and the metapackage can't drift apart. Each list's role comes from its header line:
+- **No marker → Depends:** what NimbusOS needs to work. That covers `10-base`, `20-plasma` core, `30-theming-fonts`, `50-docker`, `60-virtualization` and `70-storage-nas`: 70 packages plus the six NimbusOS packages.
+- **`#! nimbus: desktop-recommends` → Recommends:** what users may reasonably remove. That covers `15-firmware` (all firmware and microcode), `25-desktop-extras` (KDE apps, both browsers, Discover with PackageKit, Flatpak, Bluetooth, command-line conveniences, `kde-plasma-desktop`) and `75-storage-optional` (SnapRAID): 37 packages.
+- **`#! nimbus: exclude-from-desktop` → left out:** Calamares, which removes itself after install, and `90-nimbusos`, the metapackage itself.
 
-**NOTE-49 — `nimbus.conf` values reach the packages.** Build tunables that installed systems need (the APT URL, the `releases.json` URL, the Maintainer) are written as `@NIMBUS_*@` tokens in the packaging and payload files. That includes `debian/control`, `debian/changelog` trailers, `debian/copyright`, os-release, the APT source and pin files, and `nimbus-update`'s build values. `tools/build-debs.sh` fills them in from `build/nimbus.conf` when it stages a package, so `nimbus.conf` remains the one place to change them. The maintainer's address in particular exists only in `nimbus.conf` and in the built packages' `Maintainer` field and changelog (A11). An unknown token stops the build, and `install.test.sh` checks that no token reaches an installed system. Staging also sets file modes by content (`#!` → 0755, otherwise 0644), so packages are identical whether they were built from a Windows or a Linux checkout.
+This splits the spec's seven lists into nine. Debian's `kde-plasma-desktop` hard-depends on `kde-baseapps` (Dolphin), so it is only recommended, and the Plasma core it depends on (`plasma-desktop`, `plasma-workspace`, `udisks2`, `upower`) is listed by name.
+
+Why the split works:
+- Removing a recommended package keeps `nimbusos-desktop` installed.
+- apt never reinstalls a recommendation the user removed, but it does install packages that a later release newly recommends.
+- `nimbus-update install` and `auto` always pass `-o APT::Install-Recommends=true` and never `--no-install-recommends`.
+
+`packages/nimbusos-release/tests/recommends.test.sh` proves this with real apt and the real `nimbus-update` (§7). If `nimbusos-desktop` is missing anyway, `nimbus-update status` reports `desktop_metapackage_installed: false`. The Updates page (deliverable 8) then shows "This system no longer receives new NimbusOS software. Reinstall nimbusos-desktop", and the dashboard raises the same alert.
+
+The `*.list.binary` files are never read: they only fill the ISO's package pool, where GRUB for BIOS and for UEFI sit in separate lists because the two conflict and the installer picks one. A package listed twice is an error. To live-build the marker lines are ordinary comments (NOTE-53).
+
+**NOTE-49 — `nimbus.conf` values reach the packages.** Build tunables that installed systems need (the APT URL, the `releases.json` URL, the Maintainer) are written as `@NIMBUS_*@` tokens in the packaging and payload files. That includes `debian/control`, `debian/changelog` trailers, `debian/copyright`, os-release, the APT source and pin files, and `nimbus-update`'s build values. `tools/build-debs.sh` fills them in from `build/nimbus.conf` when it stages a package, so `nimbus.conf` remains the one place to change them. The maintainer's address in particular exists only in `nimbus.conf` and in the built packages' `Maintainer` field and changelog (A11). An unknown token stops the build, and `install.test.sh` checks that no token reaches an installed system.
+
+**File modes come from git (revised after review).** Staging sets every file to 0644 and every directory to 0755, then gives 0755 to exactly the files git's index records as `100755` (`nimbus_apply_git_modes`, which reads `git ls-files -s`). Files git doesn't track are staged as 0644, with a warning. So a package is identical whether it was built from a Windows or a Linux checkout, and a Python module with a shebang stays non-executable. `tools/file-modes.conf` lists by role which files must be executable, and `tools/check-file-modes.sh` (CI) fails on any tracked file whose mode in git doesn't match that list. It printed the exact `git update-index --chmod` fix in the test where it was made to fail.
 
 **NOTE-54 — Justified lintian overrides.** lintian 2.122 is clean for the packages built so far except for three tags on `nimbusos-release`. Each is overridden with its justification in `debian/lintian-overrides`:
 - `package-installs-apt-sources`: shipping the NimbusOS source is this package's purpose (spec 4.1).
@@ -417,7 +439,7 @@ Because live-build only places keys at that fixed `trusted.gpg.d/<name>.asc` pat
 
 `tools/build-debs.sh --lintian` fails on any other error or warning.
 
-**NOTE-50 — Developing on Windows.** The repository is edited on Windows with `core.filemode=false`. `.gitattributes` forces LF line endings, and executable bits are recorded explicitly with `git update-index --chmod=+x` for every script, hook and `debian/rules`. Everything that needs Debian runs in `tools/dev-shell.sh`. On this workstation that is Podman inside the WSL distribution `nimbus-build`; any Docker or Podman host works.
+**NOTE-50 — Developing on Windows.** The repository is edited on Windows with `core.filemode=false`. `.gitattributes` forces LF line endings, and executable bits are recorded explicitly with `git update-index --chmod=+x` for every script, hook and `debian/rules`. Everything that needs Debian runs in `tools/dev-shell.sh`. On this workstation that is Podman inside the WSL distribution `nimbus-build`; any Docker or Podman host works. By default `dev-shell.sh` mounts the checkout read-only and works in a clone inside the container, which is faster than the Windows mount and has git's file modes. Uncommitted changes are applied with `git apply --index`, so new files keep their recorded modes. ISOs and `.deb` files come back to the host in `dist/` and `_build/debs/`. `--mount` runs directly in the checkout, for tools that must write into it (`fetch-docker-key.sh --write`).
 
 ### Found by the Trixie archive check (deliverable 3)
 
@@ -501,6 +523,60 @@ docker-ce:
 ```
 
 How to read it: the NimbusOS and Docker repositories offer `bash` 99.0 and 98.0, yet both are pinned to 1, so Debian's 5.2.37-2 (priority 500) stays the candidate. NimbusOS's own `nimbus-control` and Docker's `docker-ce` get 500. In the version table, the left number is the priority of the version; the indented line shows the source's default (1).
+
+**Review fixes after part 1** (2026-11-17; every test ran in a fresh `debian:trixie` container in `dev-shell.sh`'s new clone mode). All pass:
+- **Packages:** 76 Depends and 37 Recommends in the built `nimbusos-desktop`. Only `nimbus-update` and `nimbus-flathub-setup` are executable inside the packages. lintian is clean (NOTE-54).
+- **Test results:**
+
+| Test | Result |
+|---|---|
+| `check-file-modes.sh` | 83 tracked files OK; flipping two bits made it fail, with the fix commands |
+| `pytest` (`nimbus-update`) | 17 passed; `install` and `auto` pass `APT::Install-Recommends=true` and never `--no-install-recommends` |
+| `apt-integration.test.sh` | 6 passed |
+| `install.test.sh` | 22 passed |
+| `recommends.test.sh` | 12 passed |
+| `os-identity.test.sh` | 11 passed (network) |
+
+- **`recommends.test.sh`** walks through four steps:
+  1. Install the stand-in v1; removing `firefox-esr` keeps `nimbusos-desktop` installed.
+  2. Publish v2 and run `nimbus-update auto`: it installs the newly recommended `new-app` and does not reinstall `firefox-esr`.
+  3. Publish v3 and run `nimbus-update install`: same result.
+  4. Remove `nimbusos-desktop`: `status` shows the warning.
+- **Two test artifacts found while writing it:**
+  - Debian's `libc6` declares `Breaks: firefox-esr (<< 91~)`, so a stand-in `firefox-esr 1.0` is (correctly) never installed; the stand-in now uses version 140.5.0esr-1.
+  - Python's test web server answers 304 if a republished `Release` has the same one-second timestamp; the test waits a second before each publish.
+
+**os-release, unattended-upgrades, Docker and Calamares** (`os-identity.test.sh`, NimbusOS os-release installed). Excerpts:
+
+```
+$ grep ID/CODENAME /etc/os-release
+NAME="NimbusOS"   ID=nimbusos   ID_LIKE=debian   VERSION_CODENAME=trixie   DEBIAN_CODENAME=trixie
+$ cat /etc/debian_version            -> 13.7 (base-files: /etc/debian_version)
+$ lsb_release -a
+Distributor ID: NimbusOS   Description: NimbusOS 0.0.0+git…   Codename: trixie
+$ unattended-upgrade --dry-run --debug     (ntfs-3g installed at 1:2022.10.3-5+deb13u2)
+Allowed origins are: origin=Debian,codename=trixie,label=Debian-Security, origin=Debian,codename=trixie-security,label=Debian-Security
+Packages that will be upgraded: libntfs-3g89t64 ntfs-3g zlib1g
+$ apt-get -s dist-upgrade
+Inst zlib1g [1:1.3.dfsg+really1.3.1-1+b1] (1:1.3.dfsg+really1.3.1-1+deb13u1 Debian-Security:13/stable-security [amd64])
+Inst ntfs-3g [1:2022.10.3-5+deb13u2] (1:2022.10.3-5+deb13u3 Debian-Security:13/stable-security [amd64]) []
+Inst libntfs-3g89t64 [1:2022.10.3-5+deb13u2] (1:2022.10.3-5+deb13u3 Debian-Security:13/stable-security [amd64])
+$ nimbus-update check (NimbusOS repository not published yet)
+nimbusos: unreachable (nikolajalbrechtsen.github.io)
+$ docker.list (rendered docker.list.binary) and Docker's own codename lookup
+deb [arch=amd64 signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] https://download.docker.com/linux/debian trixie stable
+$(. /etc/os-release && echo "$VERSION_CODENAME")  -> trixie
+$ apt-cache policy docker-ce   -> Candidate: 5:29.10.0-1~debian.13~trixie (download.docker.com trixie/stable, 500)
+$ Calamares 3.3.14 + calamares-settings-debian 13.0.13
+helpers/calamares-sources-media: RELEASE="trixie"; helpers/calamares-sources-final: RELEASE="trixie"
+(no Calamares program file or module mentions os-release or VERSION_CODENAME)
+```
+
+What this shows:
+- **unattended-upgrades:** `${distro_codename}` still expands to `trixie`, and its allowed origins are exactly the two Debian-Security patterns, so a pending security update is picked up.
+- **apt** sees the same updates from Debian-Security.
+- **Docker:** its source and its documented codename lookup both resolve to trixie.
+- **Calamares:** Debian's Calamares helpers hard-code the release and don't depend on os-release at all. NimbusOS replaces `sources-final` anyway (NOTE-06).
 
 Facts confirmed by reading live-build `1:20250505+deb13u1`'s own scripts and Debian's `calamares-settings-debian 13.0.13`:
 - `chroot_archives` copies `*.key.chroot` unchanged to `trusted.gpg.d/<name>.asc` (`.gpg` if the file isn't ASCII-armored; it tests with `grep "PGP PUBLIC KEY BLOCK"`), and removes both the `.list.chroot` source and that key itself at the end of the chroot stage (NOTE-03).

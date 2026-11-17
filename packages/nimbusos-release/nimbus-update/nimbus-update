@@ -95,6 +95,14 @@ APT_KEEP_CONFIG = [
     "-o", "Dpkg::Options::=--force-confdef",
     "-o", "Dpkg::Options::=--force-confold",
 ]
+# Packages a new NimbusOS release starts to recommend must arrive with the
+# update, even if an administrator turned Recommends off globally. apt never
+# reinstalls a recommended package the user removed earlier (docs/PLAN.md
+# NOTE-48). nimbus-update never passes --no-install-recommends.
+APT_WITH_RECOMMENDS = ["-o", "APT::Install-Recommends=true"]
+DESKTOP_METAPACKAGE = "nimbusos-desktop"
+DESKTOP_MISSING_TEXT = ("This system no longer receives new NimbusOS software. "
+                        "Reinstall nimbusos-desktop (sudo apt install nimbusos-desktop).")
 
 BETA_SOURCES_TEXT = """\
 # NimbusOS beta channel
@@ -550,6 +558,13 @@ def installed_release():
     }
 
 
+def package_installed(name):
+    """True if dpkg has NAME fully installed (no python3-apt needed)."""
+    result = subprocess.run(["dpkg-query", "-W", "-f=${db:Status-Status}", name],
+                            capture_output=True, text=True, env={"PATH": APT_ENV_BASE["PATH"]})
+    return result.returncode == 0 and result.stdout.strip() == "installed"
+
+
 def read_status():
     try:
         with open(STATUS_PATH, encoding="utf-8") as handle:
@@ -582,6 +597,7 @@ def build_status(errors, groups, removals, releases, releases_error, checked_at)
         "reboot_packages": reboot_packages,
         "channel": conf["CHANNEL"],
         "policy": conf["POLICY"],
+        "desktop_metapackage_installed": package_installed(DESKTOP_METAPACKAGE),
     }
 
 
@@ -624,6 +640,8 @@ def describe(status):
         lines.append(status["releases_error"])
     if status.get("reboot_required"):
         lines.append("A restart is required to finish installing updates.")
+    if status.get("desktop_metapackage_installed") is False:
+        lines.append(DESKTOP_MISSING_TEXT)
     return "\n".join(lines)
 
 
@@ -634,6 +652,7 @@ def cmd_status(args):
     status["channel"], status["policy"] = conf["CHANNEL"], conf["POLICY"]
     status["installed"] = installed_release()
     status["reboot_required"], status["reboot_packages"] = reboot_state()
+    status["desktop_metapackage_installed"] = package_installed(DESKTOP_METAPACKAGE)
     emit(args, status, describe(status))
     return 0
 
@@ -665,7 +684,8 @@ def cmd_install(args):
         say("==> apt-get full-upgrade")
         status_code, _ = run_streaming(
             ["apt-get", "-y", "-q", "full-upgrade",
-             "-o", "DPkg::Lock::Timeout=600", "-o", "APT::Status-Fd=1", *APT_KEEP_CONFIG], apt_env())
+             "-o", "DPkg::Lock::Timeout=600", "-o", "APT::Status-Fd=1", *APT_WITH_RECOMMENDS, *APT_KEEP_CONFIG],
+            apt_env())
         status = refresh_status(errors, now_utc())
     if status_code == 0:
         message = "Updates installed."
@@ -704,7 +724,7 @@ def cmd_auto(args):
                                          env=apt_env()).stdout.split())
         status_code, _ = run_streaming(
             ["apt-get", "-y", "-q", "install", "--no-remove",
-             "-o", "DPkg::Lock::Timeout=0", *APT_KEEP_CONFIG, *packages], apt_env())
+             "-o", "DPkg::Lock::Timeout=0", *APT_WITH_RECOMMENDS, *APT_KEEP_CONFIG, *packages], apt_env())
         if auto_before:
             subprocess.run(["apt-mark", "auto", *sorted(auto_before)], capture_output=True, env=apt_env())
         refresh_status(errors, now_utc())

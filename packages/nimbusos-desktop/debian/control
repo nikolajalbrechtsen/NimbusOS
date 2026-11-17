@@ -19,13 +19,16 @@ Depends: ${misc:Depends},
  nimbusos-branding (>= ${binary:Version}),
  nimbus-control (>= ${binary:Version}),
  nimbus-catalog (>= ${binary:Version})
+Recommends: ${nimbus:ListRecommends}
 Description: NimbusOS desktop system (metapackage)
  Installs everything NimbusOS consists of: the KDE Plasma desktop with
  the Nimbus Dark theme, Docker CE, KVM/QEMU with libvirt, Samba with
  mergerfs and SnapRAID, the Nimbus Control Center and its app catalog, and
  the NimbusOS update channel.
  .
- Its dependency list is generated from the live image's package lists, so
+ Its dependencies are generated from the live image's package lists, so
  the image and installed systems always contain the same software, and a
  package added to NimbusOS reaches existing installations with their next
- update.
+ update. What NimbusOS needs to work is a dependency; applications and
+ optional firmware are only recommended, so removing one of them keeps this
+ package (and future NimbusOS updates) installed.

@@ -1,0 +1,24 @@
+#! nimbus: desktop-recommends
+# =============================================================================
+# 15-firmware.list.chroot - firmware and CPU microcode (recommended)
+# =============================================================================
+# What: device firmware and microcode from non-free-firmware.
+# Why:  spec section 1 (Apps row). The image needs it to support common
+#       hardware, but a given machine may not, and removing for example
+#       firmware-iwlwifi on a machine without Intel Wi-Fi must not take
+#       nimbusos-desktop with it. So the metapackage Recommends these
+#       (marker line above; docs/PLAN.md NOTE-48). firmware-intel-graphics
+#       carries the Intel GPU firmware that Trixie split out of
+#       firmware-misc-nonfree.
+# Format rules: see 10-base.list.chroot.
+# =============================================================================
+
+firmware-linux
+firmware-misc-nonfree
+firmware-amd-graphics
+firmware-intel-graphics
+firmware-iwlwifi
+firmware-realtek
+firmware-sof-signed
+intel-microcode
+amd64-microcode

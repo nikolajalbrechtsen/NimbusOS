@@ -1,0 +1,12 @@
+#! nimbus: desktop-recommends
+# =============================================================================
+# 75-storage-optional.list.chroot - scheduled parity (recommended)
+# =============================================================================
+# What: SnapRAID, which the "Pooled + parity" storage mode uses.
+# Why:  spec Tab C. The Control Center hides "Pooled + parity" when SnapRAID
+#       is missing (docs/PLAN.md NOTE-26), so a user without parity disks may
+#       remove it without losing nimbusos-desktop (NOTE-48).
+# Format rules: see 10-base.list.chroot.
+# =============================================================================
+
+snapraid

@@ -1,18 +1,22 @@
 # =============================================================================
-# 10-base.list.chroot - NimbusOS base system
+# 10-base.list.chroot - NimbusOS base system (required)
 # =============================================================================
-# What: system basics, networking, audio, firmware, CPU microcode and Mesa.
-# Why:  spec section 1 (Apps row) plus what a desktop needs underneath it.
-#       The kernel is added by live-build itself (lb config --linux-flavours).
+# What: system basics, networking, audio and Mesa that NimbusOS needs to work.
+# Why:  spec section 1. The kernel is added by live-build itself
+#       (lb config --linux-flavours). Firmware, microcode and optional tools
+#       are in 15-firmware and 25-desktop-extras, which nimbusos-desktop only
+#       Recommends (docs/PLAN.md NOTE-48).
 #
 # Format rules for every list in this directory (live-build 1:20250505 passes
 # the file through printf and runs lines that start with an exclamation mark):
 #   * one package name per line, plain comment lines starting with a hash;
 #   * no comment after a package name, no percent sign, no backslash.
-# tools/verify-trixie.sh enforces these rules and proves every package exists
-# in Trixie. Unless a list is marked otherwise, its packages are also Depends
-# of nimbusos-desktop (tools/gen-desktop-depends.sh), so adding a package here
-# also delivers it to installed systems with their next update.
+# A header line "#! nimbus: <role>" sets how nimbusos-desktop lists the
+# packages: no marker = Depends, desktop-recommends = Recommends,
+# exclude-from-desktop = not listed. tools/verify-trixie.sh enforces the
+# format and proves every package exists in Trixie. Every package in a list is
+# installed in the image; through nimbusos-desktop, a package added here also
+# reaches installed systems with their next update.
 # =============================================================================
 
 # System basics
@@ -20,50 +24,24 @@ sudo
 locales
 console-setup
 keyboard-configuration
-bash-completion
-man-db
-less
-nano
 ca-certificates
-curl
-gpg
 cryptsetup
 systemd-timesyncd
 unattended-upgrades
 
 # Networking
 network-manager
-openssh-client
 
-# Audio and Bluetooth (PipeWire with WirePlumber)
+# Audio (PipeWire with WirePlumber)
 pipewire
 pipewire-pulse
 pipewire-alsa
 wireplumber
-libspa-0.2-bluetooth
-bluez
-
-# Firmware, from non-free-firmware. firmware-intel-graphics carries the
-# Intel GPU firmware that Trixie split out of firmware-misc-nonfree.
-firmware-linux
-firmware-misc-nonfree
-firmware-amd-graphics
-firmware-intel-graphics
-firmware-iwlwifi
-firmware-realtek
-firmware-sof-signed
-
-# CPU microcode, from non-free-firmware
-intel-microcode
-amd64-microcode
 
 # Graphics: Mesa OpenGL, Vulkan and VA-API drivers
 libgl1-mesa-dri
 mesa-vulkan-drivers
 mesa-va-drivers
-
-# Flatpak (the Flathub remote is added by nimbusos-release)
-flatpak
 
 # Boot splash (the theme ships in nimbusos-branding)
 plymouth

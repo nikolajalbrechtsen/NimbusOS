@@ -182,16 +182,24 @@ stage_package() {
 			cp -a -- "$NIMBUS_REPO_ROOT/catalog" "$dst/catalog"
 			;;
 		nimbusos-desktop)
-			# ${nimbus:ListDepends}, generated from the live-build package lists
-			# so the image and the metapackage never drift (NOTE-48).
-			"$NIMBUS_REPO_ROOT/tools/gen-desktop-depends.sh" >"$dst/debian/nimbus-list-depends"
-			[[ -s "$dst/debian/nimbus-list-depends" ]] || die "tools/gen-desktop-depends.sh produced an empty dependency list."
+			# ${nimbus:ListDepends} and ${nimbus:ListRecommends}, generated from
+			# the live-build package lists so the image and the metapackage
+			# never drift (NOTE-48).
+			"$NIMBUS_REPO_ROOT/tools/gen-desktop-depends.sh" --depends >"$dst/debian/nimbus-list-depends"
+			"$NIMBUS_REPO_ROOT/tools/gen-desktop-depends.sh" --recommends >"$dst/debian/nimbus-list-recommends"
+			[[ -s "$dst/debian/nimbus-list-depends" && -s "$dst/debian/nimbus-list-recommends" ]] \
+				|| die "tools/gen-desktop-depends.sh produced an empty Depends or Recommends list."
 			;;
 	esac
 
 	write_build_values "$dst"
-	# File modes by content, not by the host file system (see common.sh).
-	nimbus_normalize_modes "$dst"
+	# File modes as recorded in git, not as the host file system shows them
+	# (see common.sh). The package tree first, then the copied source trees.
+	nimbus_apply_git_modes "$dst" "packages/$pkg"
+	case "$pkg" in
+		nimbus-control) nimbus_apply_git_modes "$dst/control-center" "control-center" ;;
+		nimbus-catalog) nimbus_apply_git_modes "$dst/catalog" "catalog" ;;
+	esac
 	# Fill in @NIMBUS_*@ tokens everywhere in the staged copy: debian/control
 	# (Maintainer, Homepage), debian/changelog trailers, debian/copyright, and
 	# payload templates such as os-release and the APT source (NOTE-49).

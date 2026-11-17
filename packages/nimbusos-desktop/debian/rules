@@ -2,19 +2,24 @@
 # =============================================================================
 # debian/rules for nimbusos-desktop
 # =============================================================================
-# What: fills the ${nimbus:ListDepends} substvar from debian/nimbus-list-depends,
+# What: fills the ${nimbus:ListDepends} and ${nimbus:ListRecommends} substvars
+#       from debian/nimbus-list-depends and debian/nimbus-list-recommends,
 #       which tools/build-debs.sh generates with tools/gen-desktop-depends.sh
 #       from build/config/package-lists/ when it stages this package.
 # Why:  the image and the metapackage are defined by the same lists, so they
-#       can't drift apart (docs/PLAN.md NOTE-48). The file is generated, not
-#       committed, and it is not a *.substvars file, which dh_clean would delete.
+#       can't drift apart. What NimbusOS needs is a dependency; what users may
+#       remove is only recommended (docs/PLAN.md NOTE-48). The files are
+#       generated, not committed, and they are not *.substvars files, which
+#       dh_clean would delete.
 # =============================================================================
 
 %:
 	dh $@
 
 override_dh_gencontrol:
-	@test -s debian/nimbus-list-depends || { \
-		echo "debian/nimbus-list-depends is missing: build this package with tools/build-debs.sh." >&2; \
-		exit 1; }
-	dh_gencontrol -- "-Vnimbus:ListDepends=$$(cat debian/nimbus-list-depends)"
+	@for f in debian/nimbus-list-depends debian/nimbus-list-recommends; do \
+		test -s $$f || { echo "$$f is missing: build this package with tools/build-debs.sh." >&2; exit 1; }; \
+	done
+	dh_gencontrol -- \
+		"-Vnimbus:ListDepends=$$(cat debian/nimbus-list-depends)" \
+		"-Vnimbus:ListRecommends=$$(cat debian/nimbus-list-recommends)"

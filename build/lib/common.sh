@@ -364,12 +364,21 @@ nimbus_parse_package_list() {
 	done <"$file"
 }
 
-# nimbus_list_excluded_from_desktop FILE — true if the list is marked
-#   #! nimbus: exclude-from-desktop-depends
-# (Calamares, which removes itself after install, and the metapackage's own
-# list; docs/PLAN.md NOTE-48).
-nimbus_list_excluded_from_desktop() {
-	grep -qx '#! nimbus: exclude-from-desktop-depends' -- "$1"
+# nimbus_list_role FILE — how nimbusos-desktop lists a .list.chroot's
+# packages (docs/PLAN.md NOTE-48), from its "#! nimbus: <role>" header line:
+#   depends      no marker: NimbusOS needs these to work
+#   recommends   "#! nimbus: desktop-recommends": users may remove them
+#   exclude      "#! nimbus: exclude-from-desktop": Calamares (removes itself
+#                after install) and the metapackage's own list
+nimbus_list_role() {
+	local markers
+	markers="$(grep -E '^#! nimbus: ' -- "$1" || true)"
+	case "$markers" in
+		"")                                 echo depends ;;
+		"#! nimbus: desktop-recommends")    echo recommends ;;
+		"#! nimbus: exclude-from-desktop")  echo exclude ;;
+		*) die "$1: unknown or repeated marker line(s): $(echo "$markers" | tr '\n' ' ')" ;;
+	esac
 }
 
 # -----------------------------------------------------------------------------
@@ -488,24 +497,38 @@ Run the refresh workflow (GitHub -> Actions -> refresh -> Run workflow) to re-si
 }
 
 # -----------------------------------------------------------------------------
-# File modes of staged copies
+# File modes of staged copies: taken from git, never from the file system
 # -----------------------------------------------------------------------------
-# nimbus_normalize_modes DIR — directories 0755; regular files 0755 if they
-# start with "#!" (scripts, debian/rules, maintainer scripts), else 0644.
+# nimbus_apply_git_modes DEST PREFIX — DEST is a staged copy of the repository
+# directory PREFIX. Directories become 0755; every file becomes 0644, except
+# files git records as executable (100755), which become 0755. Files git
+# doesn't track are staged as 0644 with a warning.
 # Why: a checkout on a Windows file system (WSL /mnt/c, Docker Desktop) shows
 # every file as 0777, and debhelper runs an executable debian/install as a
-# script. With this rule a package is identical whichever host it was built
-# on, and it matches the executable bits recorded in git.
-nimbus_normalize_modes() {
-	local f
-	find "$1" -type d -exec chmod 0755 {} +
-	while IFS= read -r -d '' f; do
-		if [[ "$(head -c 2 -- "$f")" == "#!" ]]; then
-			chmod 0755 -- "$f"
-		else
-			chmod 0644 -- "$f"
+# script. git's index is the one record of which files are meant to be
+# executable (tools/check-file-modes.sh keeps it right), so a package is
+# identical whichever host it was built on.
+nimbus_apply_git_modes() {
+	local dest="$1" prefix="$2" entry mode path rel
+	local -a untracked=()
+	if ! nimbus_git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+		warn "Not a git checkout: the file modes of $prefix are taken from the file system."
+		return 0
+	fi
+	find "$dest" -type d -exec chmod 0755 {} +
+	find "$dest" -type f -exec chmod 0644 {} +
+	while IFS= read -r -d '' entry; do
+		mode="${entry%% *}"                      # "<mode> <object> <stage>\t<path>"
+		path="${entry#*$'\t'}"
+		rel="${path#"$prefix"/}"
+		if [[ "$mode" == 100755 && -f "$dest/$rel" ]]; then
+			chmod 0755 -- "$dest/$rel"
 		fi
-	done < <(find "$1" -type f -print0)
+	done < <(nimbus_git ls-files -s -z -- "$prefix")
+	mapfile -d '' -t untracked < <(nimbus_git ls-files -z --others --exclude-standard -- "$prefix")
+	if ((${#untracked[@]})); then
+		warn "Not tracked by git, so staged as 0644: ${untracked[*]}. Run git add (with --chmod=+x for scripts)."
+	fi
 }
 
 # -----------------------------------------------------------------------------

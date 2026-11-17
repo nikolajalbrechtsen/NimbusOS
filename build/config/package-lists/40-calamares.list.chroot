@@ -1,4 +1,4 @@
-#! nimbus: exclude-from-desktop-depends
+#! nimbus: exclude-from-desktop
 # =============================================================================
 # 40-calamares.list.chroot - the Calamares installer (live session only)
 # =============================================================================
@@ -6,9 +6,8 @@
 #       sources-media steps are used), plus the tools its partition and
 #       bootloader steps call.
 # Why:  spec section 1 (Installer row). Calamares removes itself from the
-#       installed system, so this list is excluded from nimbusos-desktop's
-#       Depends by the marker line above (docs/PLAN.md NOTE-48); otherwise
-#       removing Calamares would also remove the metapackage.
+#       installed system, so this list is left out of nimbusos-desktop by
+#       the marker line above (docs/PLAN.md NOTE-48).
 # Format rules: see 10-base.list.chroot.
 # =============================================================================
 

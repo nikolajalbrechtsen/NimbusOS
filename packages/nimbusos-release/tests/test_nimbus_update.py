@@ -192,6 +192,42 @@ def test_history_parsing(nu):
     assert entries[1]["error"].startswith("Sub-process")
 
 
+# --- Recommends always reach the system (docs/PLAN.md NOTE-48) --------------------
+
+def capture_apt_calls(nu, monkeypatch):
+    """Run install/auto with every side effect replaced; return the apt-get argv lists."""
+    calls = []
+    monkeypatch.setattr(nu, "require_root", lambda: None)
+    monkeypatch.setattr(nu, "file_lock", lambda *a, **k: __import__("contextlib").nullcontext())
+    monkeypatch.setattr(nu, "lock_is_free", lambda path: True)
+    monkeypatch.setattr(nu, "apt_update", lambda lock_timeout: [])
+    monkeypatch.setattr(nu, "refresh_status", lambda errors, ts: {"reboot_required": False, "ok": True})
+    monkeypatch.setattr(nu, "installed_nimbus_packages", lambda: ["nimbusos-desktop"])
+    monkeypatch.setattr(nu, "run_streaming", lambda argv, env: (calls.append(argv), (0, []))[1])
+    monkeypatch.setattr(nu.subprocess, "run", lambda *a, **k: types.SimpleNamespace(stdout="", returncode=0))
+    return calls
+
+
+@pytest.mark.parametrize("command", ["install", "auto"])
+def test_updates_install_new_recommends(nu, monkeypatch, command):
+    calls = capture_apt_calls(nu, monkeypatch)
+    assert nu.main([command]) == 0
+    assert len(calls) == 1
+    argv = calls[0]
+    assert "--no-install-recommends" not in argv
+    assert "APT::Install-Recommends=true" in argv
+    assert "Dpkg::Options::=--force-confold" in argv
+
+
+def test_status_warns_when_the_metapackage_is_missing(nu, monkeypatch, capsys):
+    monkeypatch.setattr(nu, "package_installed", lambda name: False)
+    assert nu.main(["status"]) == 0
+    assert "This system no longer receives new NimbusOS software. Reinstall nimbusos-desktop" in capsys.readouterr().out
+    monkeypatch.setattr(nu, "package_installed", lambda name: True)
+    assert nu.main(["status"]) == 0
+    assert "no longer receives" not in capsys.readouterr().out
+
+
 # --- status on a fresh system ----------------------------------------------------
 
 def test_status_json_before_first_check(nu, capsys):
@@ -200,6 +236,7 @@ def test_status_json_before_first_check(nu, capsys):
         'NIMBUSOS_CHANNEL=stable\nNIMBUSOS_DEB_VERSION="0.1.0"\n')
     pathlib.Path(nu.REBOOT_REQUIRED).write_text("*** System restart required ***\n")
     pathlib.Path(nu.REBOOT_REQUIRED_PKGS).write_text("linux-image-amd64\n")
+    nu.package_installed = lambda name: True
     assert nu.main(["--json", "status"]) == 0
     status = json.loads(capsys.readouterr().out)
     assert status["checked_at"] is None
@@ -208,3 +245,4 @@ def test_status_json_before_first_check(nu, capsys):
     assert status["reboot_required"] is True
     assert status["reboot_packages"] == ["linux-image-amd64"]
     assert status["update_available"] is False
+    assert status["desktop_metapackage_installed"] is True

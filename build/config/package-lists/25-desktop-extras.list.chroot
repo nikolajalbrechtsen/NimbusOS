@@ -1,0 +1,55 @@
+#! nimbus: desktop-recommends
+# =============================================================================
+# 25-desktop-extras.list.chroot - applications and conveniences (recommended)
+# =============================================================================
+# What: the standard KDE applications, Discover with its built-in PackageKit
+#       backend and Flatpak, the two browsers, Bluetooth, and everyday
+#       command-line tools.
+# Why:  spec section 1 (Apps row). They are in the image, but users may
+#       reasonably remove any of them, and doing so must not remove
+#       nimbusos-desktop. So the metapackage Recommends these (marker line
+#       above; docs/PLAN.md NOTE-48). apt never reinstalls a recommended
+#       package the user removed, but it does install packages that a later
+#       NimbusOS release newly recommends. Chromium is also a hard dependency
+#       of nimbus-control, because it runs the Control Center window.
+# Format rules: see 10-base.list.chroot.
+# =============================================================================
+
+# KDE's full application set and settings extras
+kde-plasma-desktop
+kde-config-sddm
+bluedevil
+kinfocenter
+breeze-gtk-theme
+
+# Applications
+konsole
+dolphin
+kate
+ark
+okular
+gwenview
+kde-spectacle
+
+# Software centre: Discover with PackageKit (built in) and Flatpak backends
+plasma-discover
+plasma-discover-backend-flatpak
+packagekit
+flatpak
+
+# Browsers
+firefox-esr
+chromium
+
+# Bluetooth
+bluez
+libspa-0.2-bluetooth
+
+# Command-line conveniences
+bash-completion
+man-db
+less
+nano
+curl
+gpg
+openssh-client

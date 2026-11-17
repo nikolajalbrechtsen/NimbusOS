@@ -2,8 +2,8 @@
 # 70-storage-nas.list.chroot - SMB shares, discovery, pooling, parity, disks
 # =============================================================================
 # What: Samba with its VFS modules (catia, fruit, streams_xattr, recycle),
-#       Windows and macOS discovery, mergerfs pooling, SnapRAID parity,
-#       SMART monitoring and the file-system tools the Storage tab uses.
+#       Windows and macOS discovery, mergerfs pooling, SMART monitoring and
+#       the file-system tools the Storage tab uses (required).
 # Why:  spec Tab C (runtime packages). Trixie has no wsdd package; wsdd2
 #       provides the same Windows network discovery (docs/PLAN.md NOTE-51).
 # Format rules: see 10-base.list.chroot.
@@ -18,9 +18,8 @@ smbclient
 wsdd2
 avahi-daemon
 
-# Pooling and scheduled parity
+# Pooling (SnapRAID for scheduled parity is in 75-storage-optional)
 mergerfs
-snapraid
 
 # Disk health, partitioning and file systems
 smartmontools
