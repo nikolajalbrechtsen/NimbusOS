@@ -1,0 +1,22 @@
+#!/usr/bin/make -f
+# =============================================================================
+# debian/rules for nimbusos-branding
+# =============================================================================
+# What: renders the artwork (Makefile: PNGs with rsvg-convert, GRUB fonts with
+#       grub-mkfont, the assembled global theme and kdeglobals) and installs
+#       it with debian/install.
+# Why:  the repository holds only SVG and text (docs/PLAN.md NOTE-12); the
+#       raster files and fonts exist only inside the built package.
+# =============================================================================
+
+%:
+	dh $@
+
+override_dh_auto_build:
+	$(MAKE) all
+
+override_dh_auto_clean:
+	$(MAKE) clean
+
+# Nothing to install with "make install"; debian/install does it.
+override_dh_auto_install:

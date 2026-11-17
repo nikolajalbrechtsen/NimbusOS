@@ -1,0 +1,12 @@
+{
+    "KPlugin": {
+        "Authors": [
+            {
+                "Name": "@NIMBUS_COPYRIGHT_HOLDER@"
+            }
+        ],
+        "Id": "NimbusSky",
+        "License": "CC-BY-SA-4.0",
+        "Name": "Nimbus Sky"
+    }
+}

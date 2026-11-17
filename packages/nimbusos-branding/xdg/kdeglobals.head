@@ -1,0 +1,26 @@
+# /etc/xdg/kdeglobals - NimbusOS defaults for every user (nimbusos-branding)
+#
+# System-wide defaults: anything a user changes in System Settings goes into
+# their own ~/.config/kdeglobals and wins, so existing users get theme
+# updates for every setting they never changed (docs/PLAN.md NOTE-10).
+# The colour groups below this header are copied from NimbusDark.colors when
+# the package is built, so new users get the Nimbus Dark colours right away.
+
+[General]
+ColorScheme=NimbusDark
+AccentColor=108,196,255
+font=Inter,10,-1,5,400,0,0,0,0,0,0,0,0,0,0,1
+menuFont=Inter,10,-1,5,400,0,0,0,0,0,0,0,0,0,0,1
+toolBarFont=Inter,10,-1,5,400,0,0,0,0,0,0,0,0,0,0,1
+smallestReadableFont=Inter,8,-1,5,400,0,0,0,0,0,0,0,0,0,0,1
+fixed=JetBrains Mono,10,-1,5,400,0,0,0,0,0,0,0,0,0,0,1
+
+[Icons]
+Theme=Papirus-Dark
+
+[KDE]
+LookAndFeelPackage=org.nimbusos.desktop
+widgetStyle=Breeze
+
+[WM]
+activeFont=Inter,10,-1,5,600,0,0,0,0,0,0,0,0,0,0,1

@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- "Nimbus Sky" wallpaper: a dark night sky with faint blue and violet glows
+     and soft cloud bands, matching the Nimbus Dark palette (bg #0b111b,
+     accent #6cc4ff, violet #b39cff). Rendered to PNG at several sizes at
+     package build time; also the source of the GRUB, SDDM and installer
+     backgrounds. CC-BY-SA-4.0. -->
+<svg xmlns="http://www.w3.org/2000/svg" width="3840" height="2160" viewBox="0 0 3840 2160">
+  <title>Nimbus Sky</title>
+  <defs>
+    <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#070b12"/>
+      <stop offset="0.55" stop-color="#0b111b"/>
+      <stop offset="1" stop-color="#121c2c"/>
+    </linearGradient>
+    <radialGradient id="glowBlue" cx="0.24" cy="0.28" r="0.5">
+      <stop offset="0" stop-color="#6cc4ff" stop-opacity="0.22"/>
+      <stop offset="1" stop-color="#6cc4ff" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="glowViolet" cx="0.8" cy="0.74" r="0.48">
+      <stop offset="0" stop-color="#b39cff" stop-opacity="0.18"/>
+      <stop offset="1" stop-color="#b39cff" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="band" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#9fd6ff" stop-opacity="0"/>
+      <stop offset="0.5" stop-color="#9fd6ff" stop-opacity="0.10"/>
+      <stop offset="1" stop-color="#c7b8ff" stop-opacity="0"/>
+    </linearGradient>
+    <filter id="soft" x="-20%" y="-50%" width="140%" height="200%">
+      <feGaussianBlur stdDeviation="60"/>
+    </filter>
+  </defs>
+  <rect width="3840" height="2160" fill="url(#sky)"/>
+  <rect width="3840" height="2160" fill="url(#glowBlue)"/>
+  <rect width="3840" height="2160" fill="url(#glowViolet)"/>
+  <g filter="url(#soft)">
+    <ellipse cx="1350" cy="1380" rx="1500" ry="150" fill="url(#band)"/>
+    <ellipse cx="2550" cy="1600" rx="1350" ry="120" fill="url(#band)"/>
+    <ellipse cx="1900" cy="1780" rx="1800" ry="170" fill="url(#band)"/>
+    <ellipse cx="900" cy="1160" rx="700" ry="80" fill="url(#band)"/>
+  </g>
+  <g fill="#e7eef8">
+    <circle cx="420" cy="260" r="2.4" opacity="0.55"/>
+    <circle cx="980" cy="140" r="1.8" opacity="0.45"/>
+    <circle cx="1610" cy="330" r="2.2" opacity="0.5"/>
+    <circle cx="2240" cy="180" r="1.6" opacity="0.4"/>
+    <circle cx="2890" cy="300" r="2.6" opacity="0.55"/>
+    <circle cx="3420" cy="150" r="1.8" opacity="0.45"/>
+    <circle cx="3610" cy="520" r="2.0" opacity="0.4"/>
+    <circle cx="260" cy="700" r="1.6" opacity="0.35"/>
+    <circle cx="3150" cy="760" r="1.6" opacity="0.35"/>
+  </g>
+</svg>

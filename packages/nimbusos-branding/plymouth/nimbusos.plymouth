@@ -1,0 +1,8 @@
+[Plymouth Theme]
+Name=NimbusOS
+Description=NimbusOS boot splash: the logo on the Nimbus Dark background, with a progress bar and a passphrase prompt for encrypted disks.
+ModuleName=script
+
+[script]
+ImageDir=/usr/share/plymouth/themes/nimbusos
+ScriptFile=/usr/share/plymouth/themes/nimbusos/nimbusos.script

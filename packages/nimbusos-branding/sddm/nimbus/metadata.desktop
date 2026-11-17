@@ -1,0 +1,14 @@
+[SddmGreeterTheme]
+Name=Nimbus
+Description=NimbusOS login screen in Nimbus Dark
+Author=@NIMBUS_COPYRIGHT_HOLDER@
+Copyright=(c) @NIMBUS_COPYRIGHT_YEARS@ @NIMBUS_COPYRIGHT_HOLDER@
+License=CC-BY-SA-4.0
+Type=sddm-theme
+Version=@NIMBUS_DISPLAY_VERSION@
+Website=@NIMBUS_HOME_URL@
+MainScript=Main.qml
+ConfigFile=theme.conf
+Theme-Id=nimbus
+Theme-API=2.0
+QtVersion=6

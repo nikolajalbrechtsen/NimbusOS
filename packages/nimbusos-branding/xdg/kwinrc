@@ -1,0 +1,18 @@
+# /etc/xdg/kwinrc - NimbusOS window-manager defaults (nimbusos-branding)
+#
+# Blur and background contrast behind translucent panels and menus, and the
+# translucency effect, as the Nimbus Dark theme asks for (spec section 1).
+# The Breeze decoration rounds the title-bar corners; KWin in Trixie has no
+# option to round all corners (docs/PLAN.md NOTE-01).
+
+[Plugins]
+blurEnabled=true
+contrastEnabled=true
+translucencyEnabled=true
+
+[Effect-blur]
+BlurStrength=10
+
+[org.kde.kdecoration2]
+library=org.kde.breeze
+theme=Breeze

@@ -1,0 +1,5 @@
+# /etc/xdg/plasmarc - NimbusOS Plasma style default (nimbusos-branding)
+# Breeze Dark panels and widgets; Nimbus Dark adds its colours and accent.
+
+[Theme]
+name=breeze-dark

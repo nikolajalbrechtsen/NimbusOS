@@ -1,0 +1,18 @@
+{
+    "KPackageStructure": "Plasma/LookAndFeel",
+    "KPlugin": {
+        "Authors": [
+            {
+                "Name": "@NIMBUS_COPYRIGHT_HOLDER@"
+            }
+        ],
+        "Category": "",
+        "Description": "Nimbus Dark: Breeze Dark with the NimbusOS accent, Papirus-Dark icons, Inter, the Nimbus Sky wallpaper and a floating bottom panel",
+        "Id": "org.nimbusos.desktop",
+        "License": "CC-BY-SA-4.0",
+        "Name": "Nimbus Dark",
+        "Version": "@NIMBUS_OS_VERSION_ID@",
+        "Website": "@NIMBUS_HOME_URL@"
+    },
+    "X-Plasma-APIVersion": "2"
+}

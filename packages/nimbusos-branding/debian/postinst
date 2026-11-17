@@ -1,0 +1,47 @@
+#!/bin/sh
+# =============================================================================
+# postinst for nimbusos-branding
+# =============================================================================
+# What: 1. Plymouth: selects the "nimbusos" theme while the distribution's
+#          default theme is still in use. A theme the administrator chose
+#          is never replaced. The initramfs is rebuilt through the
+#          update-initramfs trigger (debian/triggers).
+#       2. GRUB: regenerates the boot menu so the NimbusOS theme and name
+#          take effect, but only where GRUB is installed. A failure is
+#          reported, not fatal: the old menu keeps working.
+#       3. SDDM: on a new system, starts the login screen's session list on
+#          Plasma (Wayland) (docs/PLAN.md NOTE-08); an existing choice is kept.
+# Why:  spec section 1. Every step checks before it acts, so running this
+#       again changes nothing.
+# =============================================================================
+set -e
+
+case "$1" in
+	configure)
+		# 1. Plymouth: the administrator's choice is a Theme= line in
+		#    /etc/plymouth/plymouthd.conf. Without one (or with the
+		#    distribution default), NimbusOS's theme is selected.
+		if command -v plymouth-set-default-theme >/dev/null 2>&1; then
+			chosen="$(sed -n 's/^[[:space:]]*Theme[[:space:]]*=[[:space:]]*//p' /etc/plymouth/plymouthd.conf 2>/dev/null | tail -n 1)"
+			distro_default="$(sed -n 's/^Theme=//p' /usr/share/plymouth/plymouthd.defaults 2>/dev/null || true)"
+			if [ -z "$chosen" ] || [ "$chosen" = "$distro_default" ]; then
+				plymouth-set-default-theme nimbusos
+			fi
+		fi
+
+		# 2. GRUB
+		if command -v update-grub >/dev/null 2>&1 && [ -e /boot/grub/grub.cfg ]; then
+			update-grub 2>&1 || echo "nimbusos-branding: update-grub failed; the previous boot menu stays in place. Run 'sudo update-grub' to see why." >&2
+		fi
+
+		# 3. SDDM's remembered session (only if SDDM never wrote one)
+		if [ -d /var/lib/sddm ] && [ ! -e /var/lib/sddm/state.conf ] && getent passwd sddm >/dev/null; then
+			printf '[Last]\nSession=/usr/share/wayland-sessions/plasma.desktop\n' >/var/lib/sddm/state.conf
+			chown sddm:sddm /var/lib/sddm/state.conf
+		fi
+		;;
+esac
+
+#DEBHELPER#
+
+exit 0

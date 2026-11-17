@@ -79,7 +79,8 @@ NimbusOS/
 │   ├── nimbusos-docker-keyring/      Docker's key → /usr/share/keyrings/docker-archive-keyring.gpg (NOTE-05)
 │   ├── nimbusos-release/             os-release, apt/*, nimbus-update/ (CLI, man page, default settings),
 │   │                                 flathub/, systemd/*, tests/ (pytest, apt pinning proof, install test)
-│   ├── nimbusos-branding/            art/*.svg, grub/, plymouth/, sddm/, calamares/, plasma/, xdg/, Makefile
+│   ├── nimbusos-branding/            art/*.svg, grub/, plymouth/, sddm/, calamares/, plasma/, color-schemes/, xdg/,
+│   │                                 Makefile (renders PNGs and GRUB fonts), tests/install.test.sh
 │   ├── nimbus-control/               debian/ only; payload staged from control-center/ at build time
 │   ├── nimbus-catalog/               debian/ only; payload staged from catalog/ at build time
 │   └── nimbusos-desktop/             metapackage; Depends generated from build/config/package-lists/
@@ -186,7 +187,7 @@ git tag -a v0.2.0  ──►  release.yml   (concurrency group "nimbusos-publish
 | `nimbusos-archive-keyring` | `/usr/share/keyrings/nimbusos-archive-keyring.gpg` (every `keys/*.asc`, so it can hold old + new keys during rotation) | none | none |
 | `nimbusos-docker-keyring` | `/usr/share/keyrings/docker-archive-keyring.gpg`: Docker's key, the `Signed-By` of the image's `docker.list` (NOTE-05) | none | none |
 | `nimbusos-release` | `/usr/lib/os-release` (diverted, NOTE-36); `/etc/apt/sources.list.d/nimbusos.sources` (deb822, `Signed-By`); `/etc/apt/preferences.d/nimbusos.pref` + `nimbusos-docker.pref`; `/etc/apt/apt.conf.d/21nimbusos-periodic` + `52nimbusos-unattended-upgrades`; `/usr/bin/nimbus-update` + man page; `nimbus-update-check.timer`, `nimbus-update-auto.timer`, `nimbus-flathub-setup.service` | Depends: `nimbusos-archive-keyring (>= ver)`, `python3`, `python3-apt`, `unattended-upgrades`, `gpgv` | preinst: `dpkg-divert --rename` of base-files' os-release. postinst: create `/etc/nimbusos/update.conf` if missing; recreate the beta source if Beta is selected. postrm: remove the diversion; on purge, remove the generated files |
-| `nimbusos-branding` | GRUB theme + `/etc/default/grub.d/10-nimbusos.cfg`, Plymouth theme, SDDM theme + `/etc/sddm.conf.d/10-nimbusos.conf`, Calamares branding, wallpaper, Plasma global theme `org.nimbusos.desktop` (with `layout.js`), `NimbusDark.colors`, `/etc/xdg` defaults, logo icons | Depends: `papirus-icon-theme`, `fonts-inter`, `fonts-jetbrains-mono`, `plymouth`, `plymouth-label` | postinst: register `default.plymouth` alternative; `update-grub` if GRUB is installed; initramfs trigger |
+| `nimbusos-branding` | GRUB theme + `/etc/default/grub.d/10-nimbusos.cfg`, Plymouth theme, SDDM theme "nimbus" + `/etc/sddm.conf.d/10-nimbusos.conf`, Calamares branding, Nimbus Sky wallpaper, Plasma global theme `org.nimbusos.desktop` (with `layout.js` and splash), `NimbusDark.colors`, `/etc/xdg` defaults, `/etc/xdg/nimbusos/kcm-about-distrorc` (NOTE-55), the hicolor `nimbusos` icon | Depends: `papirus-icon-theme`, `breeze-cursor-theme`, `fonts-inter`, `fonts-jetbrains-mono`, `plymouth`, `plymouth-label`, `qt6-svg-plugins` | postinst: select the Plymouth theme unless the administrator chose one (NOTE-56); `update-grub` if GRUB is installed; new systems start SDDM on Plasma (Wayland). Initramfs rebuilt by trigger. postrm: hand Plymouth back |
 | `nimbus-control` | backend, frontend, `nimbus-privd`, units, Samba drop-in, polkit action, launcher | Depends: the Python stack (`python3-fastapi`, `python3-uvicorn`, `python3-websockets`, `python3-docker`, `python3-libvirt`, `python3-psutil`, `python3-jinja2`, `python3-yaml`, `python3-jsonschema`, `python3-systemd`), `fonts-inter`, `fonts-jetbrains-mono` (served to the UI from their own paths, so the OFL license stays with Debian's packages), `docker-ce`, `docker-compose-plugin`, `libvirt-daemon-system`, `samba`, `wsdd2`, `avahi-daemon`, `mergerfs`, `novnc`, `websockify`, `chromium`, …; Recommends: `snapraid` (NOTE-26) | Creates the groups `nimbus-control` and `nimbus-smb`, the system users `nimbus-control` and `nimbus-guest` (NOTE-25), and adds `nimbus-control` to `docker`, `libvirt` and `nimbus-smb`. Runs schema migrations step by step. Adds the smb.conf include (NOTE-23) and the `adduser.conf` keys (NOTE-09). Enables services on first install only. Restarts its own services only when their files changed |
 | `nimbus-catalog` | `/usr/share/nimbus-control/catalog/<app-id>/` | Enhances: `nimbus-control` | none. The backend notices catalog changes on its own and marks installed stacks with "Template update available" |
 | `nimbusos-desktop` | nothing but docs | Depends: `${nimbus:ListDepends}` (generated; 103 packages as of deliverable 3) + the six packages above at `(>= ver)` | none |
@@ -441,6 +442,24 @@ The `*.list.binary` files are never read: they only fill the ISO's package pool,
 
 **NOTE-50 — Developing on Windows.** The repository is edited on Windows with `core.filemode=false`. `.gitattributes` forces LF line endings, and executable bits are recorded explicitly with `git update-index --chmod=+x` for every script, hook and `debian/rules`. Everything that needs Debian runs in `tools/dev-shell.sh`. On this workstation that is Podman inside the WSL distribution `nimbus-build`; any Docker or Podman host works. By default `dev-shell.sh` mounts the checkout read-only and works in a clone inside the container, which is faster than the Windows mount and has git's file modes. Uncommitted changes are applied with `git apply --index`, so new files keep their recorded modes. ISOs and `.deb` files come back to the host in `dist/` and `_build/debs/`. `--mount` runs directly in the checkout, for tools that must write into it (`fetch-docker-key.sh --write`).
 
+### Found while building the branding (deliverable 5, part 2)
+
+**NOTE-55 — "About this System" branding lives in `/etc/xdg/nimbusos/`.** Trixie's Contents index shows that `desktop-base` owns `/etc/xdg/kcm-about-distrorc`, so NimbusOS can't ship that path without a file conflict. Its copy is `/etc/xdg/nimbusos/kcm-about-distrorc`, and `/etc/xdg/plasma-workspace/env/10-nimbusos-xdg.sh`, which the Plasma session sources at login, puts `/etc/xdg/nimbusos` first in `XDG_CONFIG_DIRS`, idempotently. Every other default the spec names (`/etc/xdg/kdeglobals`, `kwinrc`, `plasmarc`, `ksplashrc`, `kscreenlockerrc`, `/etc/sddm.conf.d/`, `/etc/default/grub.d/`) has no owner in Trixie, so they ship where the spec says.
+
+**NOTE-56 — How the Plymouth theme is selected.** Debian Trixie does not use a `default.plymouth` alternative. The theme comes from a `Theme=` line in `/etc/plymouth/plymouthd.conf`, or otherwise from `/usr/share/plymouth/plymouthd.defaults` (`Theme=ceratopsian`, a theme `desktop-base` provides). `plymouth-set-default-theme` reports the effective theme (`text` when that theme isn't installed).
+- **postinst:** runs `plymouth-set-default-theme nimbusos` only while `plymouthd.conf` has no `Theme=` line, or names the distribution default. A theme the administrator chose is never replaced.
+- **postrm:** on removal it resets only if `nimbusos` is still the configured theme.
+- **Both:** rebuild the initramfs through the `update-initramfs` trigger.
+
+**NOTE-57 — How the theme's pieces are made.**
+- **Raster images:** rendered from SVG at package build time: the wallpaper at 1920×1080, 2560×1440 and 3840×2160 (545 kB at 4K), plus the GRUB background, logo and highlight, and the Plymouth images. The whole package is 1.27 MB.
+- **GRUB fonts:** made from Inter with `grub-mkfont --name=…`, so the names in `theme.txt` match exactly; the test checks all three.
+- **`/etc/xdg/kdeglobals`:** a header plus the colour groups of `NimbusDark.colors`, so new users get the colours without running any tool.
+- **Panel:** `layout.js` uses only the calls Plasma 6.3's own default-panel template uses (`new Panel`, `gridUnit`, `screenGeometry`, `addWidget`, `writeConfig`). It doesn't set a floating property, because Plasma 6 panels float by default.
+- **Login screen:** the SDDM theme declares `QtVersion=6` for the `sddm-greeter-qt6` in Trixie and uses only QtQuick, QtQuick.Controls and SDDM's context objects.
+- **Installer:** Calamares (Qt 6 with SVG support) uses the logo as SVG directly.
+- **CC-BY-SA-4.0 text:** in `debian/copyright` it is byte-identical to SPDX `text/CC-BY-SA-4.0.txt` at commit `31846481de7ea17d92f2f46fad76abe58b2e9bb0` (SHA-256 `cde7883b…4beba54966`), noted in the file.
+
 ### Found by the Trixie archive check (deliverable 3)
 
 **NOTE-51 — `wsdd2` instead of `wsdd`.** Trixie has no `wsdd` package (§7). `wsdd2` (1.8.7, main) serves the same purpose: it makes the machine show up under Network in Windows Explorer through WS-Discovery. The storage list, the `nimbus-control` Depends, the services table, the alert rules and the Settings page all use `wsdd2` and its unit, `wsdd2.service`.
@@ -546,6 +565,12 @@ How to read it: the NimbusOS and Docker repositories offer `bash` 99.0 and 98.0,
   - Debian's `libc6` declares `Breaks: firefox-esr (<< 91~)`, so a stand-in `firefox-esr 1.0` is (correctly) never installed; the stand-in now uses version 140.5.0esr-1.
   - Python's test web server answers 304 if a republished `Release` has the same one-second timestamp; the test waits a second before each publish.
 
+**Deliverable 5, part 2** (`nimbusos-branding`, 2026-11-17, `dev-shell.sh` clone mode):
+- **Build:** the package builds, and lintian is clean with no overrides. Its one finding, `command-with-path-in-maintainer-script` for `[ -x /usr/sbin/update-grub ]`, was fixed by using `command -v`.
+- **`packages/nimbusos-branding/tests/install.test.sh`:** 57 passed. It covers every rendered file present, no unfilled token, all three GRUB font names matching `theme.txt`, valid JSON, the GRUB drop-in adding `splash` exactly once even if sourced twice, the XDG env script, and Plymouth: `text` → `nimbusos` on install, kept on reinstall, back to `text` on removal, with no `Theme=` left behind.
+- **Rendering:** checked by eye from the built package. The wallpaper shows a dark sky with a blue glow top left, a violet glow bottom right, soft cloud bands and faint stars. The logo is one cloud with a blue-to-violet gradient: a first render showed a seam because each shape used its own gradient box, fixed with one `userSpaceOnUse` gradient.
+- **Two build errors found and fixed:** XML forbids `--` inside comments, and an SVG comment mentioned the CSS variable `--bg`.
+
 **os-release, unattended-upgrades, Docker and Calamares** (`os-identity.test.sh`, NimbusOS os-release installed). Excerpts:
 
 ```
@@ -597,7 +622,7 @@ Facts confirmed by reading live-build `1:20250505+deb13u1`'s own scripts and Deb
 | 2 | Build entry point | `build/nimbus.conf`, `build/build.sh`, `build/lib/common.sh`, `tools/build-debs.sh`, `tools/deb-version.sh` |
 | 3 | Package lists | `build/config/package-lists/*`, `tools/gen-desktop-depends.sh`, `tools/verify-trixie.sh`, `tools/dev-shell.sh`, `tools/tests/{deb-version,image-apt-check}.test.sh` |
 | 4 | Build-time archives | `build/config/archives/{docker.list.chroot,docker.key.chroot,docker.list.binary}`, `tools/fetch-docker-key.sh`, `tools/tests/docker-archive.test.sh` |
-| 5 | Debian packaging (7 packages), in three parts | **Part 1:** `packages/{nimbusos-archive-keyring,nimbusos-docker-keyring,nimbusos-release,nimbusos-desktop}/**` (os-release, source, pinning with the `apt-cache policy` proof, unattended-upgrades drop-ins, `nimbus-update`, timers, Flathub setup, tests), plus `build-debs.sh` token rendering, mode normalization and `--only`. **Part 2:** `packages/nimbusos-branding/**` (all themes and art, CC-BY-SA-4.0 text from SPDX). **Part 3:** `packages/{nimbus-control,nimbus-catalog}/debian/**` and their maintainer-script tests |
+| 5 | Debian packaging (7 packages), in three parts | **Part 1:** `packages/{nimbusos-archive-keyring,nimbusos-docker-keyring,nimbusos-release,nimbusos-desktop}/**` (os-release, source, pinning with the `apt-cache policy` proof, unattended-upgrades drop-ins, `nimbus-update`, timers, Flathub setup, tests), plus `build-debs.sh` token rendering, mode normalization and `--only`. **Part 2 (done):** `packages/nimbusos-branding/**` (all themes and art, CC-BY-SA-4.0 text from SPDX, install test). **Part 3:** `packages/{nimbus-control,nimbus-catalog}/debian/**` and their maintainer-script tests |
 | 6 | Live hooks | `build/config/hooks/live/*.hook.chroot` |
 | 7 | Live-only files and boot menus | `build/config/includes.chroot_after_packages/**`, `build/config/bootloaders/**` |
 | 8 | Nimbus Control Center | `control-center/**` (backend, common, privd, frontend, bin, systemd, data, tests), in several batches |

@@ -1,0 +1,11 @@
+# /etc/xdg/nimbusos/kcm-about-distrorc - "About this System" branding (nimbusos-branding)
+#
+# desktop-base already owns /etc/xdg/kcm-about-distrorc, so NimbusOS keeps its
+# own copy in /etc/xdg/nimbusos, which the Plasma session puts first in
+# XDG_CONFIG_DIRS (plasma-workspace/env/10-nimbusos-xdg.sh).
+
+[General]
+Name=@NIMBUS_NAME@
+LogoPath=/usr/share/icons/hicolor/scalable/apps/nimbusos.svg
+Website=@NIMBUS_HOME_URL@
+Variant=@NIMBUS_DISPLAY_VERSION@ (@NIMBUS_CHANNEL@)

@@ -1,0 +1,8 @@
+# /etc/xdg/kscreenlockerrc - NimbusOS lock screen (nimbusos-branding)
+# The lock screen shows the Nimbus Sky wallpaper.
+
+[Greeter]
+WallpaperPlugin=org.kde.image
+
+[Greeter][Wallpaper][org.kde.image][General]
+Image=/usr/share/wallpapers/NimbusSky/

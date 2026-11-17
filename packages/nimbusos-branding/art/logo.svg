@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- NimbusOS logo: a cloud in the Nimbus Dark accent, blue to violet.
+     Source of the GRUB, Plymouth, SDDM, Calamares and icon-theme logos (rendered
+     to PNG at package build time where a format needs it). CC-BY-SA-4.0. -->
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256">
+  <title>NimbusOS</title>
+  <defs>
+    <!-- userSpaceOnUse: one gradient across all shapes, so they read as one cloud -->
+    <linearGradient id="cloud" gradientUnits="userSpaceOnUse" x1="70" y1="52" x2="214" y2="192">
+      <stop offset="0" stop-color="#a6e0ff"/>
+      <stop offset="0.55" stop-color="#6cc4ff"/>
+      <stop offset="1" stop-color="#b39cff"/>
+    </linearGradient>
+  </defs>
+  <g fill="url(#cloud)">
+    <circle cx="96" cy="140" r="46"/>
+    <circle cx="146" cy="110" r="58"/>
+    <circle cx="186" cy="150" r="38"/>
+    <rect x="58" y="140" width="166" height="48" rx="24"/>
+  </g>
+  <path d="M86 172 h96" stroke="#06182a" stroke-opacity="0.18" stroke-width="6" stroke-linecap="round"/>
+</svg>

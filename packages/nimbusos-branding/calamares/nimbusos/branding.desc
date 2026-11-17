@@ -1,0 +1,43 @@
+# =============================================================================
+# NimbusOS Calamares branding (nimbusos-branding)
+# =============================================================================
+# What: product names, links, images and sidebar colours for the installer,
+#       in the Calamares 3.3 format used by Debian's own branding.desc.
+# Why:  spec section 1 (Installer row: Calamares with NimbusOS branding). The
+#       live session's /etc/calamares/settings.conf selects this component
+#       ("branding: nimbusos", deliverable 7). Calamares in Trixie is built
+#       with Qt 6 SVG support, so the logo is used as SVG directly.
+# =============================================================================
+---
+componentName:  nimbusos
+welcomeStyleCalamares: false
+welcomeExpandingLogo: true
+windowExpanding: normal
+windowSize: 900px,620px
+windowPlacement: center
+strings:
+    productName:         "@NIMBUS_NAME@"
+    shortProductName:    "@NIMBUS_NAME@"
+    version:             "@NIMBUS_DISPLAY_VERSION@"
+    shortVersion:        "@NIMBUS_DISPLAY_VERSION@"
+    versionedName:       "@NIMBUS_NAME@ @NIMBUS_DISPLAY_VERSION@"
+    shortVersionedName:  "@NIMBUS_NAME@ @NIMBUS_DISPLAY_VERSION@"
+    bootloaderEntryName: "@NIMBUS_NAME@"
+    productUrl:          "@NIMBUS_HOME_URL@"
+    supportUrl:          "@NIMBUS_HOME_URL@"
+    knownIssuesUrl:      "@NIMBUS_BUG_REPORT_URL@"
+    releaseNotesUrl:     "@NIMBUS_HOME_URL@/releases"
+    donateUrl:           ""
+sidebar: widget
+navigation: widget
+images:
+    productLogo:         "logo.svg"
+    productIcon:         "logo.svg"
+    productWelcome:      "logo.svg"
+slideshow:               "show.qml"
+slideshowAPI: 2
+style:
+   SidebarBackground:        "#121a27"
+   SidebarText:              "#e7eef8"
+   SidebarTextCurrent:       "#06182a"
+   SidebarBackgroundCurrent: "#6cc4ff"

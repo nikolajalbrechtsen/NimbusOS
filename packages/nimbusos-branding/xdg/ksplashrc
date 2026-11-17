@@ -1,0 +1,6 @@
+# /etc/xdg/ksplashrc - NimbusOS login splash (nimbusos-branding)
+# The splash screen from the org.nimbusos.desktop global theme.
+
+[KSplash]
+Engine=KSplashQML
+Theme=org.nimbusos.desktop

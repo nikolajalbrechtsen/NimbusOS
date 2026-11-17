@@ -1,0 +1,3 @@
+# Rebuild the initramfs once at the end of the dpkg run, so it contains the
+# current Plymouth theme images.
+activate-noawait update-initramfs
