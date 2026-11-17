@@ -1,0 +1,46 @@
+# NimbusOS — ignored files
+#
+# What: keeps build products, caches and anything secret out of Git.
+# Why:  everything shipped is rebuilt from source (ground rule: reproducible,
+#       no binary assets in the repo), and signing keys must only ever live in
+#       GitHub Actions secrets (ground rule 6).
+
+# live-build working tree and package staging (created by build/build.sh and
+# tools/build-debs.sh; the checked-in build/config/ is never modified)
+/build/work/
+/_build/
+/dist/
+
+# Build outputs
+*.iso
+*.iso.part*
+*.deb
+*.ddeb
+*.buildinfo
+*.changes
+*.dsc
+SHA256SUMS
+SHA256SUMS.gpg
+
+# Python / tooling caches
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Secrets: private keys and GnuPG homes must never be committed
+*.sec
+*.sec.asc
+*secret*.asc
+*private*.asc
+private-keys-v1.d/
+.gnupg/
+gnupghome/
+
+# Editor / OS noise
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db

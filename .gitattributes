@@ -1,0 +1,19 @@
+# NimbusOS — Git attributes
+#
+# What: forces LF line endings for every text file in the repository.
+# Why:  the repository is edited on Windows, but everything in it runs on
+#       Debian. A CRLF in a shell script, debian/rules, a systemd unit or a
+#       live-build hook breaks the build or the installed system. The
+#       repository intentionally contains no binary files (images, fonts and
+#       binary keyrings are generated at build time), so "text" is safe as the
+#       default for everything.
+
+* text=auto eol=lf
+
+# Build products are never committed (see .gitignore), but if one is ever
+# added by mistake, keep Git from rewriting its bytes.
+*.iso  binary
+*.deb  binary
+*.gpg  binary
+*.png  binary
+*.pf2  binary
