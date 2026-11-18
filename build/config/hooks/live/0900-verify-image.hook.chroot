@@ -1,0 +1,234 @@
+#!/bin/bash
+# =============================================================================
+# build/config/hooks/live/0900-verify-image.hook.chroot
+# =============================================================================
+# What: checks the finished chroot before live-build packs it, and fails the
+#       build if NimbusOS would be broken. Every check runs and prints one
+#       line ("ok", "FAIL" with the reason, or "warn"), so one build shows
+#       every problem at once:
+#         os-release           /usr/lib/os-release says NimbusOS on trixie,
+#                              with ID_LIKE=debian (NOTE-36)
+#         nimbusos-packages    all seven NimbusOS packages, one version
+#         package-lists        every package in config/package-lists/
+#                              *.list.chroot is installed
+#         desktop-metapackage  every Depends and Recommends of
+#                              nimbusos-desktop is installed (NOTE-48)
+#         groups               the groups new users and the Control Center
+#                              need exist; other live-user groups only warn
+#         nimbus-control-user  in docker, libvirt and nimbus-smb
+#         adduser-conf         EXTRA_GROUPS and ADD_EXTRA_GROUPS (NOTE-09)
+#         services             enabled: display manager (SDDM), network,
+#                              Docker, libvirt, Samba, WS-Discovery, Avahi,
+#                              updates, the Control Center and its timers,
+#                              the live-only Docker tmpfs; nmbd disabled
+#         boot-splash          Plymouth theme nimbusos (NOTE-56)
+#         desktop-theme        desktop-base's desktop-theme is NimbusOS
+#         sddm-theme           SDDM uses the "nimbus" theme
+#         flathub              the Flathub remote and its stamp (hook 0100)
+#         apt-sources          NimbusOS source with its keyring, pinning
+#         tokens               no unfilled build token in a NimbusOS file
+#         machine-id           empty, so every system gets its own
+# Why:  a broken image should fail in CI, not on a user's machine. The live
+#       user's groups (live-config) are checked here because a missing group
+#       is silently skipped at boot (docs/PLAN.md NOTE-62).
+# =============================================================================
+set -euo pipefail
+
+CONFIG=/live-build/config
+# The same seven names as NIMBUS_PACKAGES in build/lib/common.sh
+# (tools/tests/hooks.test.sh checks that they match).
+NIMBUS_PACKAGES="nimbusos-archive-keyring nimbusos-docker-keyring nimbusos-release nimbusos-branding nimbusos-desktop nimbus-control nimbus-catalog"
+REQUIRED_GROUPS="@NIMBUS_USER_EXTRA_GROUPS@ nimbus-smb"
+LIVE_USER_GROUPS="@NIMBUS_LIVE_USER_GROUPS@"
+ENABLED_UNITS="display-manager.service NetworkManager.service docker.service containerd.service
+libvirtd.service smbd.service wsdd2.service avahi-daemon.service unattended-upgrades.service
+apt-daily-upgrade.timer nimbus-update-check.timer nimbus-update-auto.timer nimbus-flathub-setup.service
+nimbus-control.service nimbus-privd.socket nimbus-snapraid-sync.timer nimbus-recycle-clean.timer
+var-lib-docker.mount"
+
+failures=0
+ok()   { printf '  ok    %s\n' "$1"; }
+fail() { printf '  FAIL  %s: %s\n' "$1" "$2"; failures=$((failures + 1)); }
+warn() { printf '  warn  %s: %s\n' "$1" "$2"; }
+# report NAME PROBLEMS...: ok if no problem was given
+report() {
+	local name="$1"; shift
+	if (($#)); then fail "$name" "$*"; else ok "$name"; fi
+}
+installed() { [[ "$(dpkg-query -W -f='${db:Status-Abbrev}' "$1" 2>/dev/null)" == "ii " ]]; }
+
+echo "0900-verify-image: checking the image"
+
+# --- os-release ------------------------------------------------------------------
+# (/etc/os-release is not checked: live-build keeps it diverted until after
+# the hooks, see chroot_hacks.)
+p=()
+if [[ -f /usr/lib/os-release ]]; then
+	# shellcheck disable=SC1091
+	mapfile -t p < <(
+		. /usr/lib/os-release
+		[[ "${ID:-}" == nimbusos ]] || echo "ID=${ID:-} (want nimbusos);"
+		[[ " ${ID_LIKE:-} " == *" debian "* ]] || echo "ID_LIKE=${ID_LIKE:-} (want debian);"
+		[[ "${VERSION_CODENAME:-}" == trixie ]] || echo "VERSION_CODENAME=${VERSION_CODENAME:-} (want trixie);"
+		[[ "${DEBIAN_CODENAME:-}" == trixie ]] || echo "DEBIAN_CODENAME=${DEBIAN_CODENAME:-} (want trixie);"
+		[[ -n "${NIMBUSOS_CHANNEL:-}" ]] || echo "NIMBUSOS_CHANNEL is empty;"
+	)
+else
+	p+=("/usr/lib/os-release is missing;")
+fi
+diversion="$(dpkg-divert --list /usr/lib/os-release)"
+[[ "$diversion" == *nimbusos-release* ]] || p+=("base-files' os-release is not diverted by nimbusos-release")
+report os-release "${p[@]}"
+
+# --- NimbusOS packages --------------------------------------------------------------
+p=()
+versions=""
+for pkg in $NIMBUS_PACKAGES; do
+	if installed "$pkg"; then
+		versions+="$(dpkg-query -W -f='${Version}' "$pkg")"$'\n'
+	else
+		p+=("$pkg not installed;")
+	fi
+done
+if [[ "$(printf '%s' "$versions" | sort -u | grep -c .)" -gt 1 ]]; then
+	p+=("versions differ: $(printf '%s' "$versions" | sort -u | tr '\n' ' ')")
+fi
+report nimbusos-packages "${p[@]}"
+
+# --- package lists ---------------------------------------------------------------------
+missing=()
+lists=("$CONFIG"/package-lists/*.list.chroot)
+if [[ ! -e "${lists[0]}" ]]; then
+	fail package-lists "no $CONFIG/package-lists/*.list.chroot (this hook runs inside lb chroot_hooks)"
+else
+	while read -r pkg; do
+		installed "$pkg" || missing+=("$pkg")
+	done < <(sed -e 's/#.*$//' "${lists[@]}" | tr -s ' \t' '\n' | grep -v '^$' | sort -u)
+	report package-lists ${missing[@]+"not installed: ${missing[*]}"}
+fi
+
+# --- nimbusos-desktop ----------------------------------------------------------------
+missing=()
+if installed nimbusos-desktop; then
+	while IFS= read -r rel; do
+		[[ -n "$rel" ]] || continue
+		met=""
+		IFS='|' read -r -a alts <<<"$rel"
+		for alt in "${alts[@]}"; do
+			alt="$(sed -E 's/\(.*\)//; s/:any//; s/[[:space:]]//g' <<<"$alt")"
+			if installed "$alt"; then met=yes; break; fi
+		done
+		[[ -n "$met" ]] || missing+=("$(tr -d ' ' <<<"$rel")")
+	done < <(dpkg-query -W -f='${Depends},${Recommends}' nimbusos-desktop | tr ',' '\n')
+	report desktop-metapackage ${missing[@]+"not installed: ${missing[*]}"}
+else
+	fail desktop-metapackage "nimbusos-desktop is not installed"
+fi
+
+# --- groups -----------------------------------------------------------------------------
+missing=()
+for g in $REQUIRED_GROUPS; do
+	getent group "$g" >/dev/null || missing+=("$g")
+done
+report groups ${missing[@]+"missing: ${missing[*]}"}
+missing=()
+for g in ${LIVE_USER_GROUPS//,/ }; do
+	getent group "$g" >/dev/null || missing+=("$g")
+done
+if ((${#missing[@]})); then
+	warn live-user-groups "the live user won't be in these (they don't exist): ${missing[*]}"
+fi
+
+missing=()
+if getent passwd nimbus-control >/dev/null; then
+	member_of=" $(id -nG nimbus-control) "
+	for g in docker libvirt nimbus-smb; do
+		[[ "$member_of" == *" $g "* ]] || missing+=("$g")
+	done
+	report nimbus-control-user ${missing[@]+"not in group(s): ${missing[*]}"}
+else
+	fail nimbus-control-user "the nimbus-control user does not exist"
+fi
+
+p=()
+grep -qx 'EXTRA_GROUPS="@NIMBUS_USER_EXTRA_GROUPS@"' /etc/adduser.conf || p+=('EXTRA_GROUPS is not "@NIMBUS_USER_EXTRA_GROUPS@";')
+grep -qx 'ADD_EXTRA_GROUPS=1' /etc/adduser.conf || p+=("ADD_EXTRA_GROUPS is not 1")
+report adduser-conf "${p[@]}"
+
+# --- services ---------------------------------------------------------------------------
+p=()
+for unit in $ENABLED_UNITS; do
+	state="$(systemctl is-enabled "$unit" 2>/dev/null || true)"
+	[[ "$state" == enabled || "$state" == alias ]] || p+=("$unit is ${state:-not found};")
+done
+if [[ -L /etc/systemd/system/display-manager.service ]]; then
+	dm="$(readlink -f /etc/systemd/system/display-manager.service)"
+	[[ "$dm" == */sddm.service ]] || p+=("display-manager.service points to $dm, not sddm.service;")
+else
+	p+=("display-manager.service is not set (SDDM's postinst sets it);")
+fi
+state="$(systemctl is-enabled nmbd.service 2>/dev/null || true)"
+[[ "$state" != enabled ]] || p+=("nmbd.service is enabled (NetBIOS is off by default)")
+report services "${p[@]}"
+
+# --- look -------------------------------------------------------------------------------
+theme="$(sed -n 's/^[[:space:]]*Theme[[:space:]]*=[[:space:]]*//p' /etc/plymouth/plymouthd.conf 2>/dev/null | tail -n 1 || true)"
+if [[ "$theme" == nimbusos ]]; then
+	ok boot-splash
+else
+	fail boot-splash "the Plymouth theme in /etc/plymouth/plymouthd.conf is '${theme:-not set}', not nimbusos"
+fi
+dt="$(update-alternatives --query desktop-theme 2>/dev/null || true)"
+dt="$(sed -n 's/^Value: //p' <<<"$dt")"
+if [[ "$dt" == /usr/share/desktop-base/nimbusos-theme ]]; then
+	ok desktop-theme
+else
+	fail desktop-theme "desktop-base's desktop-theme is '${dt:-not set}'"
+fi
+if grep -qsx 'Current=nimbus' /etc/sddm.conf.d/10-nimbusos.conf; then
+	ok sddm-theme
+else
+	fail sddm-theme "/etc/sddm.conf.d/10-nimbusos.conf does not select Current=nimbus"
+fi
+
+# --- Flathub, APT --------------------------------------------------------------------------
+p=()
+remotes="$(flatpak remotes --system --columns=name 2>/dev/null || true)"
+grep -qx flathub <<<"$remotes" || p+=("no 'flathub' remote;")
+[[ -e /var/lib/nimbusos/flathub-setup-done ]] || p+=("no stamp /var/lib/nimbusos/flathub-setup-done")
+report flathub "${p[@]}"
+
+p=()
+src=/etc/apt/sources.list.d/nimbusos.sources
+if [[ -f "$src" ]]; then
+	key="$(sed -n 's/^Signed-By:[[:space:]]*//p' "$src" | head -n 1)"
+	[[ -n "$key" && -s "$key" ]] || p+=("$src: Signed-By keyring '${key}' is missing;")
+else
+	p+=("$src is missing;")
+fi
+for f in /etc/apt/preferences.d/nimbusos.pref /etc/apt/preferences.d/nimbusos-docker.pref; do
+	[[ -f "$f" ]] || p+=("$f is missing;")
+done
+report apt-sources "${p[@]}"
+
+# --- leftovers ------------------------------------------------------------------------------
+found=()
+for pkg in $NIMBUS_PACKAGES; do
+	installed "$pkg" || continue
+	while IFS= read -r f; do
+		[[ -f "$f" && ! -L "$f" ]] || continue
+		if grep -qIE '@NIMBUS_[A-Z0-9_]+@' "$f"; then found+=("$f"); fi
+	done < <(dpkg-query -L "$pkg")
+done
+report tokens ${found[@]+"unfilled @NIMBUS_…@ tokens in: ${found[*]}"}
+
+p=()
+[[ ! -s /etc/machine-id ]] || p+=("/etc/machine-id is not empty;")
+[[ ! -e /var/lib/dbus/machine-id ]] || p+=("/var/lib/dbus/machine-id exists")
+report machine-id "${p[@]}"
+
+if ((failures)); then
+	echo "0900-verify-image: $failures check(s) failed; the image would be broken (see docs/PLAN.md NOTE-62)." >&2
+	exit 1
+fi
+echo "0900-verify-image: all checks passed"

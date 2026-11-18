@@ -173,7 +173,7 @@ main() {
 	step "Build host"
 	nimbus_check_host
 	nimbus_apt_install_missing live-build debootstrap devscripts dpkg-dev debhelper \
-		gpg gpgv curl ca-certificates git squashfs-tools xz-utils
+		gpg gpgv curl ca-certificates git squashfs-tools xz-utils initramfs-tools-core
 	export LC_ALL=C.UTF-8
 
 	work="$(nimbus_path "$NIMBUS_WORK_DIR")"
@@ -222,8 +222,11 @@ main() {
 	display="${version/\~beta./-beta.}"
 	log "Packages OK: ${NIMBUS_NAME} $display ($version)"
 
-	# Values available to @NIMBUS_*@ tokens in build/config/.
+	# Values available to @NIMBUS_*@ tokens in build/config/ (nimbus_render_tree
+	# finds them with compgen -v NIMBUS_, which shellcheck can't see).
+	# shellcheck disable=SC2034
 	NIMBUS_VERSION="$version"
+	# shellcheck disable=SC2034
 	NIMBUS_DISPLAY_VERSION="$display"
 	export SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH:-$(nimbus_git log -1 --format=%ct 2>/dev/null || date -u +%s)}"
 
@@ -264,6 +267,11 @@ main() {
 	[[ -f "$work/binary/live/filesystem.squashfs" ]] \
 		|| die "$work/binary/live/filesystem.squashfs is missing; cannot check the image."
 	nimbus_check_image_apt "$work/binary/live/filesystem.squashfs"
+	initrds=("$work"/binary/live/initrd.img*)
+	[[ -e "${initrds[0]}" ]] || die "$work/binary/live/ has no initrd.img; cannot check the boot splash."
+	for initrd in "${initrds[@]}"; do
+		nimbus_check_image_initrd "$initrd"
+	done
 
 	step "Output"
 	iso="$out/${NIMBUS_ISO_BASENAME}.iso"

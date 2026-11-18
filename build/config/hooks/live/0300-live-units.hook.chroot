@@ -1,0 +1,42 @@
+#!/bin/bash
+# =============================================================================
+# build/config/hooks/live/0300-live-units.hook.chroot
+# =============================================================================
+# What: enables the live-session-only systemd units: every unit file that
+#       config/includes.chroot_after_packages/etc/systemd/system/ holds (for
+#       example var-lib-docker.mount, Docker on tmpfs, docs/PLAN.md NOTE-21).
+#       It reads that list from /live-build/config, where live-build
+#       bind-mounts the configuration (read-only) while hooks run, so a new
+#       live-only unit needs no change here. Fails if a listed unit didn't
+#       reach the chroot or can't be enabled.
+# Why:  units copied in as plain files are not enabled by anyone else.
+#       systemctl enable works offline, so also in the chroot. Calamares'
+#       nimbus-target-cleanup step removes these units and their links from
+#       installed systems (deliverable 7).
+# =============================================================================
+set -euo pipefail
+
+me="0300-live-units"
+INCLUDES=/live-build/config/includes.chroot_after_packages/etc/systemd/system
+
+[[ -d /live-build/config ]] \
+	|| { echo "$me: /live-build/config is missing; this hook runs only inside lb chroot_hooks." >&2; exit 1; }
+
+shopt -s nullglob
+units=()
+for f in "$INCLUDES"/*.service "$INCLUDES"/*.socket "$INCLUDES"/*.timer "$INCLUDES"/*.mount "$INCLUDES"/*.path; do
+	[[ -f "$f" ]] && units+=("$(basename "$f")")
+done
+if ((${#units[@]} == 0)); then
+	echo "$me: no live-only units in includes.chroot_after_packages."
+	exit 0
+fi
+
+for unit in "${units[@]}"; do
+	[[ -f "/etc/systemd/system/$unit" ]] \
+		|| { echo "$me: /etc/systemd/system/$unit is missing in the chroot (includes.chroot_after_packages not copied?)." >&2; exit 1; }
+	systemctl --quiet enable "$unit"
+	[[ "$(systemctl is-enabled "$unit" 2>/dev/null)" == enabled ]] \
+		|| { echo "$me: $unit could not be enabled (does it have an [Install] section?)." >&2; exit 1; }
+	echo "$me: enabled $unit"
+done

@@ -54,12 +54,11 @@ NimbusOS/
 │       │   ├── docker.key.chroot                    Docker's public key, byte-identical to Docker's download
 │       │   └── docker.list.binary                   the image's source: signed-by=/usr/share/keyrings/docker-archive-keyring.gpg
 │       │                                            (both lists state the fingerprint in a comment; CI checks it)
-│       ├── hooks/live/
+│       ├── hooks/live/                              run after Debian's own hooks (NOTE-62)
 │       │   ├── 0100-flathub-preseed.hook.chroot     runs the packaged Flathub setup once at build time
-│       │   ├── 0200-live-installer-launcher.hook.chroot  hides Debian's "Install Debian" entry in the live image
-│       │   ├── 0300-live-units.hook.chroot          enables the live-only units below
-│       │   ├── 0900-verify-image.hook.chroot        fails the build if groups/services/os-release are wrong
-│       │   └── 9990-update-initramfs.hook.chroot    final initramfs with the NimbusOS Plymouth theme
+│       │   ├── 0200-live-installer-launcher.hook.chroot  hides Debian's "Install Debian" menu entry and desktop icon
+│       │   ├── 0300-live-units.hook.chroot          enables every live-only unit in includes.chroot_after_packages
+│       │   └── 0900-verify-image.hook.chroot        fails the build if the image would be broken (15 checks)
 │       ├── includes.chroot_after_packages/          live-session-only files (NOTE-02, NOTE-06)
 │       │   ├── etc/calamares/settings.conf
 │       │   ├── etc/calamares/modules/{users,bootloader,welcome,finished}.conf
@@ -130,7 +129,9 @@ NimbusOS/
 │   └── tests/
 │       ├── deb-version.test.sh       version mapping (real dpkg; 40 checks)
 │       ├── image-apt-check.test.sh   final-image APT check: good image + 6 failure modes
-│       └── docker-archive.test.sh    fetch-docker-key.sh --verify-local: real files + 8 breakages
+│       ├── docker-archive.test.sh    fetch-docker-key.sh --verify-local: real files + 8 breakages
+│       ├── hooks.test.sh             the live-build hooks in a container standing in for the chroot
+│       └── image-initrd-check.test.sh  the boot-splash check against real Trixie initramfs images
 │
 └── docs/
     ├── PLAN.md                       this file
@@ -167,7 +168,7 @@ git tag -a v0.2.0  ──►  release.yml   (concurrency group "nimbusos-publish
 3. Gets the `.deb` files: builds them with `tools/build-debs.sh`, takes them from `--debs-dir` (CI), or with `--from-repo` downloads them with `apt-get download` through a temporary APT configuration that uses `Signed-By` with the NimbusOS key. It then checks that all seven are present, share one version, and carry the committed archive key and Docker's key. They go into `build/work/config/packages.chroot/`.
 4. Prepares `build/work/`: copies `build/config/`, fills in `@NIMBUS_*@` tokens from `nimbus.conf`, and extracts the GRUB theme from the `nimbusos-branding` package, so live and installed boot share one theme. live-build itself copies the bootloader overlays over its own templates and renders `config/bootloaders/splash.svg` (verified in live-build 1:20250505).
 5. Runs `lb clean`, `lb config` (every flag explained in `build/lib/common.sh`, where `tools/verify-trixie.sh` reuses the same list) and one `lb build`, with `SOURCE_DATE_EPOCH` set from the git commit.
-6. Checks the finished image's APT setup by reading `filesystem.squashfs` with `unsquashfs`. The image must contain `/etc/apt/sources.list.d/docker.list` from `docker.list.binary`, with every line `signed-by=/usr/share/keyrings/docker-archive-keyring.gpg`. It must contain no trace of `docker.list.chroot`, no second Docker source, no Docker key in `trusted.gpg.d`, and the packaged keyring must hold exactly Docker's key. Then it renames the output to `nimbusos-amd64.iso`, writes `nimbusos-amd64.iso.sha256`, and says whether the ISO is over GitHub's 2 GiB asset limit (release.yml then splits it, NOTE-41).
+6. Checks the finished image's APT setup by reading `filesystem.squashfs` with `unsquashfs`. The image must contain `/etc/apt/sources.list.d/docker.list` from `docker.list.binary`, with every line `signed-by=/usr/share/keyrings/docker-archive-keyring.gpg`. It must contain no trace of `docker.list.chroot`, no second Docker source, no Docker key in `trusted.gpg.d`, and the packaged keyring must hold exactly Docker's key. It also lists the live initramfs (`binary/live/initrd.img*`) with `lsinitramfs`: it must hold the NimbusOS Plymouth theme and Plymouth's script plugin, or the boot splash would not be NimbusOS (NOTE-62). Then it renames the output to `nimbusos-amd64.iso`, writes `nimbusos-amd64.iso.sha256`, and says whether the ISO is over GitHub's 2 GiB asset limit (release.yml then splits it, NOTE-41).
 
 **Version mapping** (one version for all seven packages, taken from git; tested by `tools/tests/deb-version.test.sh` with real `dpkg`):
 
@@ -520,6 +521,29 @@ The `*.list.binary` files are never read: they only fill the ISO's package pool,
   - their lines in `debian/install`;
   - the Avahi marker comment (NOTE-58).
 
+### Found while writing the hooks (deliverable 6)
+
+**NOTE-62 — The live-build hooks.** Checked against live-build `1:20250505+deb13u1`:
+- **When they run:** `lb chroot_hooks` runs after the packages and `includes.chroot_after_packages` are in place, and while live-build's `policy-rc.d` still forbids starting services. It runs all of Debian's `config/hooks/normal/*` first: these empty `/etc/machine-id`, truncate logs, delete temporary files and remove `.pyc` caches. Only then does it run `config/hooks/live/*`. So NimbusOS's hooks run after that cleanup, and they must leave nothing behind themselves. `hooks.test.sh` checks this for hook 0100, and the verify hook checks the machine-id.
+- **What hooks can read:** while hooks run, live-build bind-mounts the configuration read-only at `/live-build/config`. Hook 0300 reads the live-only units from there, and hook 0900 reads the package lists.
+- **No hook 9990:** live-build's `chroot_hacks` runs `update-initramfs -k all -t -u` after all hooks (with `--initramfs live-boot`), so an initramfs hook of NimbusOS's own would be overwritten. Instead, `build.sh` checks the result: the ISO's initramfs must contain the nimbusos Plymouth theme and Plymouth's script plugin (`nimbus_check_image_initrd`, §2 step 6). Tested against real Trixie initramfs images.
+- **0100-flathub-preseed:** runs `nimbusos-release`'s own Flathub setup (NOTE-11), which writes its stamp, so the boot-time unit skips itself. It retries twice, then fails the build: the image promises Flathub. `flatpak remote-add --system` works as root without D-Bus, so also in the chroot. The hook removes Flatpak's download cache.
+- **0200-live-installer-launcher:** `calamares-settings-debian` 13.0.13 ships the menu entry `calamares-install-debian.desktop` ("Install Debian") and an autostart entry that copies it onto the desktop. The hook sets `NoDisplay=true` and `Hidden=true` in their `[Desktop Entry]` groups, in place. Calamares purges that package from installed systems, so a diversion would only leave a stale record on the target. If Debian renames either file, the build fails here. The live session shows "Install NimbusOS" instead (deliverable 7). Debian's own entry already has one desktop-file-validate error (`StartupNotify=True`); the hook adds none.
+- **0300-live-units:** enables every unit file in `includes.chroot_after_packages/etc/systemd/system/` (`systemctl enable` works offline). A unit that didn't reach the chroot, or can't be enabled, fails the build. Deliverable 7's `var-lib-docker.mount` (NOTE-21) therefore needs an `[Install]` section, and `nimbus-target-cleanup` must remove it and its link from installed systems.
+- **0900-verify-image:** 15 checks plus one warning, each printed as ok, FAIL with the reason, or warn; any FAIL stops the build:
+  - `/usr/lib/os-release` identity and its diversion (`/etc/os-release` stays diverted by live-build until after the hooks);
+  - the seven NimbusOS packages at one version;
+  - every package in the package lists installed, and every Depends and Recommends of `nimbusos-desktop`;
+  - the groups new users and the Control Center need, and `nimbus-control`'s memberships;
+  - the `adduser.conf` keys;
+  - services: 18 units enabled, SDDM as the display manager, nmbd off;
+  - the Plymouth, desktop-base and SDDM themes;
+  - Flathub, the NimbusOS APT source with its keyring, and the pinning;
+  - no unfilled build token in any NimbusOS file;
+  - an empty machine-id.
+
+  A live-user group from `NIMBUS_LIVE_USER_GROUPS` that doesn't exist only warns: live-config silently skips it, and `bluetooth`, `scanner` and `lpadmin` depend on optional packages. Deliverable 7 adds its own checks (Calamares settings and branding) to this hook.
+
 ### Found by the Trixie archive check (deliverable 3)
 
 **NOTE-51 — `wsdd2` instead of `wsdd`.** Trixie has no `wsdd` package (§7). `wsdd2` (1.8.7, main) serves the same purpose: it makes the machine show up under Network in Windows Explorer through WS-Discovery. The storage list, the `nimbus-control` Depends, the services table, the alert rules and the Settings page all use `wsdd2` and its unit, `wsdd2.service`.
@@ -686,6 +710,17 @@ How to read it: the NimbusOS and Docker repositories offer `bash` 99.0 and 98.0,
   - `testparm` prints SMB2_10 under its canonical name `SMB2`, so the test compares with an explicit SMB2_10 instead;
   - running the catalog test first left a simulated state directory behind, which nimbus-migrate rightly refused (exit 3). Both tests now require a clean `/var/lib/nimbus-control`, and the catalog test removes its own.
 
+**Deliverable 6** (live-build hooks, 2026-11-18, `dev-shell.sh` clone mode):
+- **`tools/tests/hooks.test.sh`:** 72 passed. It installs five real NimbusOS packages (the other two as stand-ins at the same version) into a container standing in for the chroot. Covered:
+  - 0100 adds Flathub, leaves `/tmp`, `/var/tmp`, `/root` and the machine-id unchanged, is a no-op the second time, and fails clearly without its setup script;
+  - 0200 works on Trixie's real Calamares files: valid keys, idempotent, an existing `NoDisplay=false` replaced, a renamed file fails the build;
+  - 0300 enables a unit from the includes, fails on one that didn't reach the chroot, and accepts none;
+  - 0900 in that partial image: the 13 checks that should pass do. Exactly two fail, each naming only what is really missing there: list packages such as plasma-desktop, sddm and calamares; and five services (display manager, NetworkManager, docker, containerd, the live-only tmpfs). The 10 services that are enabled are not named. Twelve deliberate breakages each produce a FAIL naming the problem, and restoring them returns to the same two failures.
+- **`tools/tests/image-initrd-check.test.sh`:** 9 passed, against real initramfs images from Trixie's kernel 6.12.117+deb13-amd64. Covered: the check passes with the nimbusos theme, fails naming the missing files with theme `text`, passes again after switching back, and fails on a non-initramfs and a missing file.
+- **shellcheck:** the hooks, both tests, `build.sh` and `common.sh` have no warnings. Three false positives in `build.sh` and `common.sh` (variables read through `compgen` or by callers) now carry a targeted disable with the reason.
+- **Earlier tests still pass:** `deb-version` 40, `image-apt-check` 7, `docker-archive` 9.
+- **Found while testing:** the first verify-hook draft had three bugs, all fixed before the runs above. A correct Plymouth theme would have been reported as a failure. `grep -q` at the end of a pipe under `pipefail` could turn a match into a failure. And `readlink -f` on a missing link gave a confusing message. The tests now cover each case.
+
 **os-release, unattended-upgrades, Docker and Calamares** (`os-identity.test.sh`, NimbusOS os-release installed). Excerpts:
 
 ```
@@ -738,7 +773,7 @@ Facts confirmed by reading live-build `1:20250505+deb13u1`'s own scripts and Deb
 | 3 | Package lists | `build/config/package-lists/*`, `tools/gen-desktop-depends.sh`, `tools/verify-trixie.sh`, `tools/dev-shell.sh`, `tools/tests/{deb-version,image-apt-check}.test.sh` |
 | 4 | Build-time archives | `build/config/archives/{docker.list.chroot,docker.key.chroot,docker.list.binary}`, `tools/fetch-docker-key.sh`, `tools/tests/docker-archive.test.sh` |
 | 5 | Debian packaging (7 packages), in three parts | **Part 1:** `packages/{nimbusos-archive-keyring,nimbusos-docker-keyring,nimbusos-release,nimbusos-desktop}/**` (os-release, source, pinning with the `apt-cache policy` proof, unattended-upgrades drop-ins, `nimbus-update`, timers, Flathub setup, tests), plus `build-debs.sh` token rendering, mode normalization and `--only`. **Part 2 (done):** `packages/nimbusos-branding/**` (all themes and art, CC-BY-SA-4.0 text from SPDX, install test). **Part 3 (done):** `packages/{nimbus-control,nimbus-catalog}/{debian,tests}/**`, plus the parts of `control-center/` the packaging runs: `systemd/*` (all units), `data/samba/nimbus.conf`, `bin/nimbus-migrate`, `migrations/0001_initial.py` and `tests/test_migrate.py` (NOTE-58 to NOTE-61) |
-| 6 | Live hooks | `build/config/hooks/live/*.hook.chroot` |
+| 6 | Live hooks (done) | `build/config/hooks/live/{0100,0200,0300,0900}-*.hook.chroot`, `nimbus_check_image_initrd` in `build/lib/common.sh` (instead of a hook 9990, NOTE-62), `tools/tests/{hooks,image-initrd-check}.test.sh` |
 | 7 | Live-only files and boot menus | `build/config/includes.chroot_after_packages/**`, `build/config/bootloaders/**` |
 | 8 | Nimbus Control Center | `control-center/**` (backend, common, privd, frontend, the remaining bin programs, data, tests), in several batches, each adding its lines to `packages/nimbus-control/debian/install` (NOTE-61) |
 | 9 | Catalog | `catalog/SCHEMA.md`, `catalog/manifest.schema.json` (with `template_version`, NOTE-60), 10 apps |
@@ -763,3 +798,4 @@ Facts confirmed by reading live-build `1:20250505+deb13u1`'s own scripts and Deb
    - maintainer scripts work in the image build chroot, start and restart only through `deb-systemd-invoke`, and never call docker, virsh or smbcontrol (NOTE-61);
    - state migrations run step by step through `schema_version`, with a backup first and one clear journal message on failure (NOTE-59);
    - each app manifest has its own `template_version` (NOTE-60).
+10. **No hook 9990** (deliverable 6). live-build already regenerates the initramfs after all hooks, so `build.sh` checks that the ISO's initramfs carries the NimbusOS boot splash instead (NOTE-62).

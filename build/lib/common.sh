@@ -440,6 +440,30 @@ nimbus_check_image_apt() {
 	log "Image APT check OK: docker.list from docker.list.binary, Signed-By $NIMBUS_DOCKER_KEYRING_PATH, no build-only key."
 }
 
+# nimbus_check_image_initrd INITRD — the live initramfs must show the NimbusOS
+# boot splash: the nimbusos Plymouth theme and Plymouth's script plugin.
+# live-build regenerates the initramfs after the hooks (chroot_hacks), so
+# this checks its result instead of a hook of its own (docs/PLAN.md NOTE-62).
+nimbus_check_image_initrd() {
+	local initrd="$1" listing path
+	local -a problems=()
+	[[ -s "$initrd" ]] || die "image initrd check: $initrd is missing or empty."
+	listing="$(lsinitramfs "$initrd" 2>/dev/null)" || die "image initrd check: lsinitramfs cannot read $initrd."
+	for path in nimbusos.plymouth nimbusos.script logo.png progress-bar.png; do
+		grep -qE "(^|/)usr/share/plymouth/themes/nimbusos/${path//./\\.}\$" <<<"$listing" \
+			|| problems+=("usr/share/plymouth/themes/nimbusos/$path is not in the initramfs")
+	done
+	grep -qE '(^|/)plymouth/script\.so$' <<<"$listing" \
+		|| problems+=("Plymouth's script plugin (plymouth/script.so) is not in the initramfs")
+	if ((${#problems[@]})); then
+		printf '[%s] ERROR: image initrd check failed for %s:\n' "$_nimbus_prog" "$initrd" >&2
+		printf '  - %s\n' "${problems[@]}" >&2
+		printf '  The boot splash would not be NimbusOS. Is nimbusos-branding installed and its Plymouth theme selected?\n' >&2
+		exit 1
+	fi
+	log "Image initrd check OK: the NimbusOS Plymouth theme and the script plugin are in $(basename "$initrd")."
+}
+
 # -----------------------------------------------------------------------------
 # NimbusOS APT repository check (docs/PLAN.md NOTE-04)
 # -----------------------------------------------------------------------------
@@ -583,6 +607,8 @@ nimbus_lb_config_args() {
 	append+=" keyboard-layouts=${NIMBUS_KEYBOARD_LAYOUTS}"
 	append+=" timezone=${NIMBUS_TIMEZONE}"
 
+	# The result, read by build.sh and tools/verify-trixie.sh.
+	# shellcheck disable=SC2034
 	NIMBUS_LB_ARGS=(
 		# Plain Debian (not a derivative of Ubuntu etc.), building a live system.
 		--mode debian

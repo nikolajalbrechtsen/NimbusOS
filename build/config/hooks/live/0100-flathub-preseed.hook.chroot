@@ -1,0 +1,43 @@
+#!/bin/bash
+# =============================================================================
+# build/config/hooks/live/0100-flathub-preseed.hook.chroot
+# =============================================================================
+# What: inside the image build chroot, runs the packaged Flathub setup
+#       (/usr/lib/nimbusos/nimbus-flathub-setup from nimbusos-release) so the
+#       ISO, and every system installed from it, already has the Flathub
+#       remote. Retries twice, 15 seconds apart, then fails the build.
+#       The setup writes its stamp, so nimbus-flathub-setup.service skips
+#       itself at boot.
+# Why:  spec section 1 ("Flatpak with Flathub pre-added"); Flathub's key comes
+#       from Flathub's own .flatpakrepo over HTTPS, never from this
+#       repository (docs/PLAN.md NOTE-11). live-build runs Debian's cleanup
+#       hooks (config/hooks/normal/8000-9020) before the live/ ones, so this
+#       hook removes Flatpak's download cache itself (NOTE-62).
+# =============================================================================
+set -euo pipefail
+
+SETUP=/usr/lib/nimbusos/nimbus-flathub-setup
+me="0100-flathub-preseed"
+
+[[ -x "$SETUP" ]] || { echo "$me: $SETUP is missing; is nimbusos-release installed?" >&2; exit 1; }
+command -v flatpak >/dev/null 2>&1 \
+	|| { echo "$me: flatpak is not installed, but the image must ship Flathub (package lists)." >&2; exit 1; }
+
+for attempt in 1 2 3; do
+	if "$SETUP"; then
+		break
+	fi
+	if ((attempt == 3)); then
+		echo "$me: could not add Flathub after 3 attempts (no network in the build, or dl.flathub.org unreachable)." >&2
+		echo "$me: the image must ship Flathub (docs/PLAN.md NOTE-11); build again when Flathub is reachable." >&2
+		exit 1
+	fi
+	echo "$me: attempt $attempt failed; retrying in 15 seconds."
+	sleep 15
+done
+
+remotes="$(flatpak remotes --system --columns=name,url)"
+grep -q '^flathub[[:space:]]' <<<"$remotes" \
+	|| { echo "$me: the setup finished, but flatpak lists no 'flathub' remote." >&2; exit 1; }
+rm -rf /var/tmp/flatpak-cache-*
+echo "$me: Flathub is configured: $(grep '^flathub[[:space:]]' <<<"$remotes")"
