@@ -1,0 +1,87 @@
+#!/usr/bin/python3
+# =============================================================================
+# /usr/lib/nimbus-control/bin/nimbus-snapraid-run: the scheduled parity run
+# =============================================================================
+# What: run as root by nimbus-snapraid-sync.service (nightly timer, or "Sync
+#       now" in the Control Center), only when /etc/nimbus/snapraid.conf
+#       exists:
+#         1. "snapraid sync": brings parity up to date with the data disks;
+#         2. once a week, after a good sync, "snapraid scrub -p 8 -o 10":
+#            checks 8 % of the array, blocks not checked for 10 days;
+#         3. writes the result to /var/cache/nimbus-privd/snapraid-status.json
+#            (last sync and scrub: time, success, last output line), which
+#            privd's snapraid.status shows on the pool card.
+#       SnapRAID's output goes to the journal. A failed run exits non-zero,
+#       so the unit fails and the dashboard raises an alert.
+# Why:  spec Tab C (Pooled + parity); docs/PLAN.md NOTE-26. Parity is
+#       scheduled, not real time.
+# =============================================================================
+
+import datetime
+import json
+import os
+import subprocess
+import sys
+
+CONF = "/etc/nimbus/snapraid.conf"
+SNAPRAID = "/usr/bin/snapraid"
+STATUS = "/var/cache/nimbus-privd/snapraid-status.json"
+SCRUB_EVERY = datetime.timedelta(days=7)
+
+
+def now():
+    return datetime.datetime.now(datetime.timezone.utc).replace(microsecond=0)
+
+
+def snapraid(*args):
+    proc = subprocess.run([SNAPRAID, "-c", CONF, *args], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+                          env={"PATH": "/usr/sbin:/usr/bin:/sbin:/bin", "LC_ALL": "C.UTF-8"}, check=False)
+    sys.stdout.write(proc.stdout)
+    sys.stdout.flush()
+    last = next((line.strip() for line in reversed(proc.stdout.splitlines()) if line.strip()), "")
+    return proc.returncode, last
+
+
+def save(status):
+    os.makedirs(os.path.dirname(STATUS), mode=0o700, exist_ok=True)
+    tmp = STATUS + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(status, f, indent=2)
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp, STATUS)
+    try:
+        os.unlink(os.path.join(os.path.dirname(STATUS), "snapraid-diff.json"))      # the counts changed
+    except FileNotFoundError:
+        pass
+
+
+def main():
+    if not os.path.exists(CONF):
+        print(f"nimbus-snapraid-run: {CONF} doesn't exist; parity isn't set up.")
+        return 0
+    try:
+        with open(STATUS, encoding="utf-8") as f:
+            status = json.load(f)
+    except (OSError, ValueError):
+        status = {}
+    code, last = snapraid("sync")
+    status.update(last_sync=now().isoformat(), last_sync_ok=code == 0, last_sync_message=last)
+    save(status)
+    if code != 0:
+        print(f"nimbus-snapraid-run: sync failed (exit status {code}): {last}", file=sys.stderr)
+        return code
+    previous = status.get("last_scrub")
+    due = not previous or now() - datetime.datetime.fromisoformat(previous) >= SCRUB_EVERY
+    if due:
+        code, last = snapraid("scrub", "-p", "8", "-o", "10")
+        status.update(last_scrub=now().isoformat(), last_scrub_ok=code == 0, last_scrub_message=last)
+        save(status)
+        if code != 0:
+            print(f"nimbus-snapraid-run: scrub found problems (exit status {code}): {last}", file=sys.stderr)
+            return code
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

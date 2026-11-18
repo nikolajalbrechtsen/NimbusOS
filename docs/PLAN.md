@@ -90,12 +90,13 @@ NimbusOS/
 │   ├── backend/nimbus_control/       FastAPI: app.py, auth.py, errors.py, config.py, fonts.py, privd_client.py,
 │   │                                 system_service.py, updates_service.py, state.py, jobs.py; Apps: catalog.py,
 │   │                                 manifest.py, compose.py, docker_api.py, apps_service.py; VMs: vm_service.py,
-│   │                                 vm_xml.py, libvirt_api.py, iso_library.py; later: metrics_service.py,
-│   │                                 storage_service.py, shares_service.py
-│   ├── common/nimbus_common/         shared by backend and privd: validate.py, protocol.py (privd wire format);
-│   │                                 later: the smb.conf renderer, schemas
+│   │                                 vm_xml.py, libvirt_api.py, iso_library.py; NAS: storage_service.py,
+│   │                                 shares_service.py; later: metrics_service.py
+│   ├── common/nimbus_common/         shared by backend, privd and timers: validate.py, protocol.py (privd wire
+│   │                                 format), shares.py (what a share is, where its folder is)
 │   ├── privd/                        nimbus-privd.py + nimbus_privd/ (server, registry, runner, audit, updates,
-│   │                                 system, stacks; later: disks, pool, samba, smbusers)
+│   │                                 system, stacks, storage (disks, pool, parity), samba (shares, SMB users),
+│   │                                 fsutil (atomic files, the fstab block))
 │   ├── frontend/                     index.html, console.html + console.js (pop-out VM console), style.css, app.js,
 │   │                                 lib/{api,ui,icons,vnc,charts}.js,
 │   │                                 views/{dashboard,apps,vms,storage,updates,settings}.js
@@ -110,6 +111,7 @@ NimbusOS/
 │       ├── fixtures/catalog/                         three demo apps for the Apps tests and screenshots
 │       ├── integration/installed-smoke.sh            the installed package, run as its units would run it
 │       ├── integration/vm-libvirt.sh                 a real libvirtd: VMs, firmware, TPM, websockify, live console shots
+│       ├── integration/nas-integration.sh            real mergerfs, SnapRAID, Samba, smbclient and iptables
 │       └── integration/samba-ucf-keeps-include.sh   CI: a ucf-managed smb.conf update keeps the include (NOTE-23)
 │
 ├── catalog/
@@ -693,6 +695,58 @@ Until batch 5, the router shows a clear "could not be shown" state for a page wh
   - An ISO in a VM's CD drive can't be deleted until it is ejected.
 - **What batch 4 must provide:** the `isos` share should create files readable by others (0644), so QEMU (`libvirt-qemu`) can read ISOs copied in over SMB.
 
+**NOTE-68 — Control Center, batch 4 of 5: Storage, Shares and Settings.** The Storage & Shares page has four tabs (Shares, Disks, Pool, Users) and the "Set up NAS" wizard; Settings has network sharing, alert thresholds and the firewall note. Checked against Trixie's Samba 4.22.11, mergerfs 2.40.2, SnapRAID 12.4, util-linux 2.41, parted 3.6, xfsprogs 6.13, smartmontools 7.4 and adduser 3.152.
+- **Where the code is.**
+  - The privd verbs are in `storage.py` (`disk.list`, `disk.smart`, `disk.format`, `disk.mount`, `disk.unmount`, `pool.apply`, `snapraid.status`, `snapraid.sync_now`) and `samba.py` (`share.apply`, `share.delete_data`, `samba.settings`, `samba.test`, `smbuser.add`, `.passwd`, `.delete`, `.list`), with `fsutil.py` for atomic files and the fstab block.
+  - The backend is in `storage_service.py` and `shares_service.py`.
+  - What a share is, and where its folder is, lives in `nimbus_common/shares.py`, so the backend, privd and the recycle-bin timer use one definition. privd computes every path from a share's name and location and never takes a path as input.
+  - The spec's example verb `samba.reload` is not a separate verb: `share.apply` reloads after its checks, so nothing can reload an unchecked configuration.
+- **Disks.**
+  - lsblk's JSON tree is walked through partitions, LUKS and LVM. A disk with anything mounted at `/`, `/boot*`, `/usr`, `/var`, `/home`, `/srv`, `/opt` or as swap is the system disk; one with `/run/live/*` is the live medium. Neither can be formatted, and neither can a disk with anything mounted.
+  - Formatting asks for the serial number to be typed. A disk that reports none (a VM's virtual disk) asks for its name instead.
+  - Labels are at most 12 characters, XFS's limit. ext4 keeps 1 % reserved on data disks and 0 % on parity disks.
+  - SMART is cached for an hour and read with `--nocheck=standby`. A sleeping disk keeps its last reading and shows as asleep.
+  - "Add" mounts an existing XFS, ext4 or btrfs filesystem, for example after a reinstall. "Unmount" is refused while the disk is in the pool or the parity set, or holds shares.
+- **Real formatting is not run in containers.** Rootless containers can't make loop devices, and a privileged container sees the host's disks, so `disk.format` and `disk.mount` are tested with every command replaced. They run on real disks in deliverable 11's QEMU test, which has three blank virtio disks.
+- **fstab.** The managed block holds the disks by `UUID=` with `nofail,x-systemd.device-timeout=30s` (fsck pass 2 for ext4), the mergerfs line and the ISO bind mount. The rest of the file is kept byte for byte, a timestamped backup is taken first (the last 10 kept), and systemd reloads its mount units.
+- **The pool.**
+  - mergerfs options: `allow_other,cache.files=off,dropcacheonclose=true,category.create=mfs|epmfs,moveonenospc=true,fsname=nimbus-pool`, with `x-systemd.requires-mounts-for` for each disk.
+  - On a mounted pool, disks and the create policy change in place through `/mnt/user/.mergerfs`, without unmounting.
+  - Found while testing: mergerfs creates nothing on a disk with less than 4 GiB free (its `minfreespace` default). Pooled disks are expected to be larger than that.
+- **Parity.**
+  - `/etc/nimbus/snapraid.conf` has one or two parity disks (each at least as large as the largest data disk), a content file in `/var/lib/nimbus-privd` plus one on each data disk, and excludes `.recycle/`.
+  - `nimbus-snapraid-run` syncs nightly, scrubs 8 % of blocks older than 10 days once a week after a good sync, and records the result.
+  - `snapraid.status` adds `snapraid diff` counts, cached 10 minutes. These count changed files, not bytes, so batch 5's "unprotected data" alert uses that count.
+  - Turning parity off keeps the old configuration in `/var/lib/nimbus-privd`.
+- **Shares.**
+  - Folders are `root:nimbus-smb` 2775, made link-safe. Each share forces group `nimbus-smb`, create mode 0664 and directory mode 2775, so ISOs copied into the `isos` share are readable by QEMU (NOTE-67).
+  - **Security:** Public is guest read and write. Secure is guest read, with a write list. Private has valid users, a write list and a read list; with nobody chosen it is unavailable.
+  - **Options:** recycle bin (`vfs_recycle` into `.recycle`, deletion time as mtime), Time Machine with a size cap, hosts allowed (plus 127.0.0.1, for the Test button). A share's location can't change later.
+  - **Missing disk:** a share whose disk isn't mounted is published as unavailable, and nothing is created on the system disk in its place.
+  - **The isos share** is bind-mounted onto `/var/lib/nimbus-vms/isos` (NOTE-27), and the ISOs already there move into it.
+  - **Deleting** a share removes the export; the folder goes only when that is ticked and the name typed.
+- **Checking Samba's configuration.** `testparm` exits 0 even with unknown parameters, so privd reads its messages.
+  - It checks a candidate copy of the whole configuration (smb.conf → nimbus.conf → the new files) first.
+  - Then it swaps the files in atomically, reloads smbd, checks the live configuration again, and restores the old files on any failure.
+  - NOTE-23's fallback puts the include back if smb.conf lost it.
+- **Found by the real testparm.** Debian's smb.conf defines `[homes]`, `[printers]` and `[print$]` before NimbusOS's include, so those sections missed the later defaults. Samba warned that "some services use vfs_fruit, others don't", which macOS handles badly.
+  - The packaged `nimbus.conf` now gives `[homes]` the same encryption and macOS settings as every share (Debian's home shares stay as they are), and turns the two printer shares off.
+  - It also adds the spec's `smb encrypt = if_required`, `vfs objects = catia fruit streams_xattr` and the fruit settings that were moved to this batch (NOTE-65).
+- **SMB users.**
+  - New users are system accounts in `nimbus-smb` (`adduser --system`, no login, no home). Because `adduser --system` returns 0 for a name that exists, privd checks with getent first.
+  - A desktop account (uid 1000 and up) only joins `nimbus-smb`. This uses `gpasswd`, because adduser 3.152's `deluser USER nimbus-smb` rejects the hyphenated group name. Other system accounts are refused.
+  - privd keeps the list of accounts it made in `/var/lib/nimbus-privd/smbusers.json`. If setting the password fails, the new account is removed again.
+  - Passwords go only to `smbpasswd -s` on stdin, and to "Test connection" through a 0600 file. They are never on a command line, in a log or in the state.
+  - Deleting a user removes them from every share first.
+- **Settings.** `settings.json` holds Samba (on/off, workgroup, description, NetBIOS) and the temperature limits (50 °C for disks and SSDs, 70 °C for NVMe). Samba changes go through `share.apply` and `samba.settings`, which enables or disables `smbd`, `wsdd2` and, with NetBIOS, `nmbd`. The firewall note is NOTE-22's.
+- **The wizard** runs as one job: format the new disks (XFS; `disk1…`, `parity1…`), set the mode, add the first SMB user (or give an existing one a new password), create the chosen shares, and turn Samba on.
+  - The default shares are `media` and `isos` (Secure), and `documents`, `backups` and `timemachine` (Private, with Time Machine on for `timemachine`).
+  - The done screen shows the connection strings and a Test connection button.
+- **The live session:** privd and the backend both refuse formatting, the pool and the wizard, and the page says to install NimbusOS first.
+- **Gap from deliverable 5, fixed here.** `nimbus-netfix.service` was enabled without its script, and the two NAS timers pointed at scripts that didn't exist. `bin/nimbus-netfix`, `nimbus-snapraid-run` and `nimbus-recycle-clean` now exist and are installed.
+  - `nimbus-netfix` accepts libvirt's NAT traffic and frames inside the user's own bridges in Docker's `DOCKER-USER` chain. It adds each rule once, and does nothing without Docker.
+  - `nimbus-control` now also Depends on `adduser`, `passwd` and `udev`.
+
 ### Found by the Trixie archive check (deliverable 3)
 
 **NOTE-51 — `wsdd2` instead of `wsdd`.** Trixie has no `wsdd` package (§7). `wsdd2` (1.8.7, main) serves the same purpose: it makes the machine show up under Network in Windows Explorer through WS-Discovery. The storage list, the `nimbus-control` Depends, the services table, the alert rules and the Settings page all use `wsdd2` and its unit, `wsdd2.service`.
@@ -966,6 +1020,34 @@ How to read it: the NimbusOS and Docker repositories offer `bash` 99.0 and 98.0,
   - a driver option was too long for its field.
   - Choosing Windows now also suggests a Windows ISO and the virtio-win ISO from the library.
 
+**Deliverable 8, batch 4** (Storage, Shares and Settings, 2026-11-18, `dev-shell.sh`, NOTE-68):
+- **pytest, 407 passed** (97 new); 11 are skipped as before (Docker's CLI, libvirtd).
+  - `test_storage_privd` (31): disk roles behind LUKS and LVM, the live medium, SMART summaries and cache, the fstab block (backups, the rest of the file kept), seven format refusals and the exact commands, mount, unmount and the pool (mergerfs line, live branch change, parity size, SnapRAID configuration, single mode with a busy pool), `snapraid diff` counts.
+  - `test_samba_privd` (31): share checks, the rendering of every option, `share.apply`'s candidate check and rollback, the include put back, a missing disk, links, the isos bind, `share.delete_data`, SMB users (passwords never in argv), Test connection's 0600 file, and the systemctl calls of `samba.settings`.
+  - `test_nas_api` (31): the API with `FakeNas`, covering the overview, disk jobs, pool changes, 12 wizard refusals and its exact privd calls, shares saved only when applying worked, field errors, users and settings.
+  - `test_nas_scripts` (4): the recycle-bin and SnapRAID timers.
+- **`nas-integration.sh`, 35 passed** (privileged throwaway container, from source). Three tmpfs mounts stand in for formatted disks. The checks cover:
+  - the mergerfs pool mounted from its fstab line and changed in place;
+  - Pooled + parity with a real SnapRAID sync and scrub, and the diff counts;
+  - SMB users made by adduser and smbpasswd;
+  - `share.apply` with the packaged `nimbus.conf`;
+  - smbclient as two users and a guest: Secure, Private (read-only for one user) and Public behave as designed;
+  - files arriving as `nimbus-smb` 0664 on a pool disk;
+  - the recycle bin and its cleaner;
+  - Avahi with `_adisk`, and the isos share bound onto the ISO library with its ISO moved in;
+  - `share.delete_data`, user removal, and `nimbus-netfix` against real iptables.
+  - It found mergerfs's 4 GiB `minfreespace`, and Debian's unconfigured share sections (NOTE-68).
+- **`installed-smoke.sh`, 42 passed** (10 new). The new checks:
+  - the storage overview through privd;
+  - an SMB user and a Private share made through the API with the installed package, privd as root and the packaged drop-in reached through postinst's include;
+  - the folder's owner and mode, testparm, and the Avahi file;
+  - smbd serving the share to that user (files `nimbus-smb` 0664) and not to guests;
+  - Test connection, and the default settings.
+- **Package:** `nimbus-control` builds and is lintian-clean with the three new scripts and the new Depends. The maintainer-script test passes 82 of 82.
+- **Screenshots looked at:** shares with their tags, usage and connection strings; disks with roles, health (bad sectors, asleep) and temperature; the pool with parity status; SMB users; the share editor (also at 800 px); formatting a disk; the NAS wizard's disk, mode and confirm steps; Settings. Fixed after looking:
+  - the parity explanation stuck to the list above it;
+  - the wizard's confirm step didn't say which disk becomes what.
+
 **os-release, unattended-upgrades, Docker and Calamares** (`os-identity.test.sh`, NimbusOS os-release installed). Excerpts:
 
 ```
@@ -1020,7 +1102,7 @@ Facts confirmed by reading live-build `1:20250505+deb13u1`'s own scripts and Deb
 | 5 | Debian packaging (7 packages), in three parts | **Part 1:** `packages/{nimbusos-archive-keyring,nimbusos-docker-keyring,nimbusos-release,nimbusos-desktop}/**` (os-release, source, pinning with the `apt-cache policy` proof, unattended-upgrades drop-ins, `nimbus-update`, timers, Flathub setup, tests), plus `build-debs.sh` token rendering, mode normalization and `--only`. **Part 2 (done):** `packages/nimbusos-branding/**` (all themes and art, CC-BY-SA-4.0 text from SPDX, install test). **Part 3 (done):** `packages/{nimbus-control,nimbus-catalog}/{debian,tests}/**`, plus the parts of `control-center/` the packaging runs: `systemd/*` (all units), `data/samba/nimbus.conf`, `bin/nimbus-migrate`, `migrations/0001_initial.py` and `tests/test_migrate.py` (NOTE-58 to NOTE-61) |
 | 6 | Live hooks (done) | `build/config/hooks/live/{0100,0200,0300,0900}-*.hook.chroot`, `nimbus_check_image_initrd` in `build/lib/common.sh` (instead of a hook 9990, NOTE-62), `tools/tests/{hooks,image-initrd-check}.test.sh` |
 | 7 | Live-only files and boot menus (done) | `build/config/includes.chroot_after_packages/**`, `build/config/bootloaders/**`, hook `0400-live-manifest`, the verify hook's installer checks, `--bootappend-live-failsafe` and `nimbus_prepare_grub_theme` in `build/lib/common.sh`, `tools/tests/{live-files,bootloaders}.test.sh` (NOTE-63, NOTE-64) |
-| 8 | Nimbus Control Center, in five batches (NOTE-65) | **Batch 1 (done):** backend core (app, auth, errors, config, fonts, privd client, system, updates), `nimbus_common` (validate, protocol), privd (server, registry, runner, audit, updates, system), launcher and Grant access, desktop file and polkit action, the whole design system (`style.css`, `lib/{api,ui,icons}.js`, `app.js`), `views/updates.js`, tests. **Batch 2 (done, NOTE-66):** `backend/nimbus_control/{manifest,catalog,compose,apps_service,jobs,docker_api,state}.py`, privd `stacks.py`, the validators for apps, form components in `lib/ui.js`, `views/apps.js`, the fixture catalog and `test_{manifest,compose,apps}.py`, privd stack tests, Apps checks in `installed-smoke.sh`, Apps scenes in `ui_preview.py`. **Batch 3 (done, NOTE-67):** `backend/nimbus_control/{libvirt_api,vm_xml,vm_service,iso_library}.py`, the VM validators and settings, `views/vms.js`, `lib/vnc.js`, `console.{html,js}`, the CSP for websockify, `test_{vm_xml,isos,vms,vm_libvirt}.py`, `tests/integration/vm-libvirt.sh`, VM checks in `installed-smoke.sh`, VM scenes and `--live-vm` in `ui_preview.py`. **Batch 4:** Storage, Shares, Settings. **Batch 5:** Dashboard and metrics. Each batch adds its lines to `packages/nimbus-control/debian/install` (NOTE-61) |
+| 8 | Nimbus Control Center, in five batches (NOTE-65) | **Batch 1 (done):** backend core (app, auth, errors, config, fonts, privd client, system, updates), `nimbus_common` (validate, protocol), privd (server, registry, runner, audit, updates, system), launcher and Grant access, desktop file and polkit action, the whole design system (`style.css`, `lib/{api,ui,icons}.js`, `app.js`), `views/updates.js`, tests. **Batch 2 (done, NOTE-66):** `backend/nimbus_control/{manifest,catalog,compose,apps_service,jobs,docker_api,state}.py`, privd `stacks.py`, the validators for apps, form components in `lib/ui.js`, `views/apps.js`, the fixture catalog and `test_{manifest,compose,apps}.py`, privd stack tests, Apps checks in `installed-smoke.sh`, Apps scenes in `ui_preview.py`. **Batch 3 (done, NOTE-67):** `backend/nimbus_control/{libvirt_api,vm_xml,vm_service,iso_library}.py`, the VM validators and settings, `views/vms.js`, `lib/vnc.js`, `console.{html,js}`, the CSP for websockify, `test_{vm_xml,isos,vms,vm_libvirt}.py`, `tests/integration/vm-libvirt.sh`, VM checks in `installed-smoke.sh`, VM scenes and `--live-vm` in `ui_preview.py`. **Batch 4 (done, NOTE-68):** privd `storage.py`, `samba.py`, `fsutil.py`, `nimbus_common/shares.py`, `backend/nimbus_control/{storage_service,shares_service}.py`, settings in `state.py`, `views/{storage,settings}.js`, `bin/{nimbus-netfix,nimbus-snapraid-run,nimbus-recycle-clean}`, the Samba drop-in's new sections, `test_{storage_privd,samba_privd,nas_api,nas_scripts}.py`, `tests/integration/nas-integration.sh`, NAS checks in `installed-smoke.sh`, storage scenes in `ui_preview.py`. **Batch 5:** Dashboard and metrics. Each batch adds its lines to `packages/nimbus-control/debian/install` (NOTE-61) |
 | 9 | Catalog | `catalog/SCHEMA.md`, `catalog/manifest.schema.json` (with `template_version`, NOTE-60), 10 apps |
 | 10 | CI/CD and docs (CI also runs `tools/tests/*.test.sh` and `tools/fetch-docker-key.sh --verify-local` / `--check`) | `.github/workflows/*`, `.github/dependabot.yml`, `apt/conf/*`, `tools/{publish-apt.sh,releases-json.py,split-iso.sh,pin-actions.sh}`, `control-center/tests/integration/samba-ucf-keeps-include.sh`, `README.md`, `LICENSE`, `LICENSES/*`, `.shellcheckrc`, `ruff.toml`, `docs/{RELEASING,SIGNING}.md`, `docs/release-notes/v0.1.0.md` |
 | 11 | Testing (the smoke test includes `systemctl --user show-environment \| grep XDG_CONFIG_DIRS` and kinfocenter's About page after a graphical login, NOTE-55) | `docs/TESTING.md`, `tools/qemu-test.sh` |

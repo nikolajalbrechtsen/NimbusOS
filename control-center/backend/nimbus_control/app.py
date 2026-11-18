@@ -6,7 +6,8 @@
 #           client, the fonts found in Debian's packages, the services, and
 #           "counters" (name -> async function) for the sidebar counts;
 #         - routes: session, system, updates, apps and the catalog, jobs,
-#           VMs and the ISO library, fonts, /logo.svg (the NimbusOS logo from
+#           VMs and the ISO library, storage, shares and SMB users, settings,
+#           fonts, /logo.svg (the NimbusOS logo from
 #           nimbusos-branding), the packaged noVNC at /novnc/ (VM consoles),
 #           then the frontend's static files;
 #         - no OpenAPI or docs pages (nothing to browse on a desktop app);
@@ -25,7 +26,8 @@ from fastapi import FastAPI
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import apps_service, errors, fonts, jobs, system_service, updates_service, vm_service
+from . import (apps_service, errors, fonts, jobs, shares_service, storage_service, system_service, updates_service,
+               vm_service)
 from .auth import LaunchCodes, SecurityMiddleware, TokenStore
 from .auth import router as session_router
 from .catalog import Catalog
@@ -55,6 +57,9 @@ def create_app(settings=None, privd=None, font_lister=fonts.package_files, docke
     app.state.isos = IsoLibrary(settings.isos_dir, settings.iso_max_bytes)
     app.state.vms = vm_service.VmService(libvirt or LibvirtApi(settings.libvirt_uri, settings.images_dir), app.state.isos,
                                          settings.vnc_tokens_dir, **({"bridges": bridges} if bridges else {}))
+    app.state.shares = shares_service.SharesService(app.state.store, app.state.privd, app.state.jobs)
+    app.state.storage = storage_service.StorageService(app.state.store, app.state.privd, app.state.jobs,
+                                                       app.state.shares)
     # A fresh start: no console stays open and no upload can be resumed.
     app.state.vms.clear_tokens()
     try:
@@ -68,7 +73,11 @@ def create_app(settings=None, privd=None, font_lister=fonts.package_files, docke
     async def vm_count():
         return await asyncio.to_thread(app.state.vms.libvirt.count)
 
-    app.state.counters = {"updates": app.state.updates.pending_count, "apps": app_count, "vms": vm_count}
+    async def share_count():
+        return len(app.state.store.shares())
+
+    app.state.counters = {"updates": app.state.updates.pending_count, "apps": app_count, "vms": vm_count,
+                          "shares": share_count}
     psutil.cpu_percent(interval=None)        # the first reading is always 0.0
 
     errors.install(app)
@@ -78,6 +87,8 @@ def create_app(settings=None, privd=None, font_lister=fonts.package_files, docke
     app.include_router(apps_service.router)
     app.include_router(jobs.router)
     app.include_router(vm_service.router)
+    app.include_router(storage_service.router)
+    app.include_router(shares_service.router)
     app.include_router(fonts.router)
 
     @app.get("/logo.svg", include_in_schema=False)

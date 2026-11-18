@@ -6,8 +6,11 @@
 #         stacks.json  {"stacks": {<name>: <record>}}: each installed app's
 #                      catalog app id, template_version, install inputs and
 #                      whether its Compose file was edited by hand
-#         shares.json  {"shares": [...]}: read here for share_hint and the
-#                      "pick a share" list; written by the shares batch
+#         shares.json  {"shares": [...]}: each share as nimbus_common.shares
+#                      describes it, plus its folder ("path", which the
+#                      Apps tab uses for share_hint and "pick a share")
+#         settings.json  Samba (enabled, workgroup, description, NetBIOS)
+#                      and alert thresholds; settings() fills in defaults
 #       Writes are atomic (temporary file, fsync, rename, mode 0640).
 #       Read-modify-write callers hold StateStore.lock.
 # Why:  one writer, no torn files, even if the service is stopped midway.
@@ -16,6 +19,11 @@
 import asyncio
 import json
 import os
+
+DEFAULT_SETTINGS = {
+    "samba": {"enabled": True, "workgroup": "WORKGROUP", "description": "NimbusOS", "netbios": False},
+    "alerts": {"hdd_temp_c": 50, "nvme_temp_c": 70},
+}
 
 
 class StateStore:
@@ -59,7 +67,18 @@ class StateStore:
     def stack_dir(self, name):
         return os.path.join(self.stacks_dir, name)
 
-    # --- shares (written by the storage batch) --------------------------------------
+    # --- shares ------------------------------------------------------------------------
     def shares(self):
         return [s for s in self.read("shares.json", {"shares": []}).get("shares", [])
                 if isinstance(s, dict) and s.get("name") and s.get("path")]
+
+    def save_shares(self, shares):
+        self.write("shares.json", {"shares": shares})
+
+    # --- settings ----------------------------------------------------------------------
+    def settings(self):
+        saved = self.read("settings.json", {})
+        return {key: {**default, **(saved.get(key) or {})} for key, default in DEFAULT_SETTINGS.items()}
+
+    def save_settings(self, settings):
+        self.write("settings.json", settings)

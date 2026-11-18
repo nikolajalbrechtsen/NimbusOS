@@ -11,11 +11,14 @@
 #       another tool) and three ISOs:
 #         - each page given on the command line at 1400x900, at full height
 #           (1400x1800) and at 800 px (the narrow layout);
-#         - "scenes": a page plus buttons to press, in order (by their text
-#           or, for icon buttons, their label; "@N" for the Nth match, a
-#           trailing "*" for "starts with"): the Apps catalog, Advanced
-#           install, its Compose tab, the template diff; the ISO library,
-#           Create VM (Linux and Windows), VM options, deleting a VM;
+#         - "scenes": a page plus buttons and labels to press, in order (by
+#           their text or, for icon buttons, their label; "@N" for the Nth
+#           match, a trailing "*" for "starts with"): the Apps catalog,
+#           Advanced install, its Compose tab, the template diff; the ISO
+#           library, Create VM (Linux and Windows), VM options, deleting a VM;
+#           the Disks, Pool and Users tabs, a share's editor, formatting a
+#           disk, and the NAS wizard on a NAS not set up yet (PreviewNas: a
+#           pool with parity, a disk with bad sectors, a sleeping one);
 #         - the signed-out page.
 #       --live-vm mode (inside tests/integration/vm-libvirt.sh, with libvirtd
 #       running): the real libvirt, a real websockify, one real VM booting
@@ -39,6 +42,7 @@
 import asyncio
 import base64
 import json
+import os
 import pathlib
 import shutil
 import subprocess
@@ -53,7 +57,8 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 
 import uvicorn  # noqa: E402
 
-from conftest import CC, FIXTURE_CATALOG, FakeDocker, FakeLibvirt, FakePrivd, container  # noqa: E402
+from conftest import CC, FIXTURE_CATALOG, FakeDocker, FakeLibvirt, FakeNas, FakePrivd, container, nas_disk  # noqa: E402
+from nimbus_common import shares as S  # noqa: E402
 from nimbus_control import compose, vm_xml  # noqa: E402
 from nimbus_control.app import create_app  # noqa: E402
 from nimbus_control.catalog import Catalog  # noqa: E402
@@ -77,6 +82,11 @@ SCENES = {
     "vms-create-windows": ("vms", ["Create VM", "Windows*"]),
     "vms-options": ("vms", ["Options: CD drive, start with the computer@2"]),
     "vms-delete": ("vms", ["Delete@0"]),
+    "storage-disks": ("storage", ["Disks"]),
+    "storage-pool": ("storage", ["Pool"]),
+    "storage-users": ("storage", ["Users"]),
+    "storage-share": ("storage", ["Edit media"]),
+    "storage-format": ("storage", ["Disks", "Format…@0"]),
 }
 
 ACTIONS_JS = """// preview-actions.js: presses buttons for ui_preview.py screenshots (never installed).
@@ -86,7 +96,7 @@ async function press(spec) {
   const prefix = text.endsWith("*") ? text.slice(0, -1) : null;
   const label = (b) => b.textContent.trim() || b.getAttribute("aria-label") || "";
   for (let i = 0; i < 100; i += 1) {
-    const matches = [...document.querySelectorAll("button")]
+    const matches = [...document.querySelectorAll("button, label")]
       .filter((b) => (prefix !== null ? label(b).startsWith(prefix) : label(b) === text));
     if (matches[Number(nth || 0)]) { matches[Number(nth || 0)].click(); return; }
     await new Promise((r) => setTimeout(r, 50));
@@ -268,17 +278,86 @@ def live_shot(path, url, width=1400, height=900, wait=10.0):
         proc.wait()
 
 
+class PreviewNas(FakeNas):
+    """A NAS in Pooled + parity mode: two data disks, a parity disk, two new disks."""
+
+    def __init__(self):
+        super().__init__()
+        smart = lambda t, **kw: {"passed": True, "temperature": t, "asleep": False, "nvme": False, **kw}  # noqa: E731
+        self.disks = [
+            {**nas_disk("nvme0n1", role="system", system=True, size=1000 ** 4, fstype="vfat"), "model": "Samsung SSD 980 1TB",
+             "serial": "S649NX0T123456", "mounts": ["/boot/efi", "/"], "smart": smart(38, nvme=True)},
+            {**nas_disk("sda", "data", "disk1", fstype="xfs", size=8 * 1000 ** 4), "model": "WDC WD80EFZZ", "serial": "WD-CA1B2C3D",
+             "mounts": ["/mnt/disks/disk1"], "smart": smart(36)},
+            {**nas_disk("sdb", "data", "disk2", fstype="xfs"), "model": "ST4000VN008", "serial": "ZDH1A2B3",
+             "mounts": ["/mnt/disks/disk2"], "smart": smart(41, reallocated=8)},
+            {**nas_disk("sdc", "parity", "parity1", fstype="xfs", size=8 * 1000 ** 4), "model": "WDC WD80EFZZ", "serial": "WD-CA9Z8Y7X",
+             "mounts": ["/mnt/parity/parity1"], "smart": {"passed": True, "temperature": 35, "asleep": True}},
+            {**nas_disk("sdd", fstype="ntfs", size=8 * 1000 ** 4), "model": "WDC WD80EFZZ", "serial": "WD-CA5E6F7G",
+             "partitions": [{"path": "/dev/sdd1", "size": 8 * 1000 ** 4, "fstype": "ntfs", "label": "Backup", "uuid": "u", "mountpoints": []}],
+             "smart": smart(33)},
+            {**nas_disk("sde", size=12 * 1000 ** 4), "model": "ST12000VN0008", "serial": "ZL2X9Y8W", "smart": smart(34)},
+        ]
+        self.fstab = [{"kind": "disk", "role": "data", "label": "disk1", "uuid": "u1", "fs": "xfs", "present": True},
+                      {"kind": "disk", "role": "data", "label": "disk2", "uuid": "u2", "fs": "xfs", "present": True},
+                      {"kind": "disk", "role": "parity", "label": "parity1", "uuid": "u3", "fs": "xfs", "present": True},
+                      {"kind": "pool", "branches": ["disk1", "disk2"], "policy": "mfs"}]
+        self.parity_configured = True
+        self.users = {"alice": {"uid": 120, "managed": True, "desktop": False},
+                      "bob": {"uid": 121, "managed": True, "desktop": False},
+                      "sam": {"uid": 1000, "managed": False, "desktop": True}}
+
+    def disk_list(self, args):
+        out = super().disk_list(args)
+        out["pool"]["usage"] = {"total": 12 * 1000 ** 4, "free": int(7.4 * 1000 ** 4)}
+        return out
+
+    def snapraid_status(self, args):
+        synced = time.strftime("%Y-%m-%dT%H:%M:%S+00:00", time.gmtime(time.time() - 6 * 3600))
+        return {"configured": True, "installed": True, "running": False, "diff": {"unprotected": 42},
+                "last": {"last_sync": synced, "last_sync_ok": True, "last_scrub": synced, "last_scrub_ok": True}}
+
+
+def build_nas(tmp, state):
+    for name in ("DISKS", "PARITY", "POOL", "SYSTEM_SHARES"):
+        path = tmp / "nas" / name.lower()
+        path.mkdir(parents=True)
+        setattr(S, name, str(path))
+    mounted = {S.POOL, f"{S.DISKS}/disk1", f"{S.DISKS}/disk2"}
+    real = os.path.ismount
+    os.path.ismount = lambda p: p in mounted or real(p)
+    specs = [S.share_spec(s, "") for s in [
+        {"name": "media", "location": "pool", "security": "secure", "users": {"alice": "rw", "sam": "rw"},
+         "recycle": {"enabled": True, "days": 30}, "notes": "Films, series and music for Jellyfin."},
+        {"name": "documents", "location": "pool", "security": "private", "users": {"alice": "rw", "bob": "ro"},
+         "recycle": {"enabled": True, "days": 30}},
+        {"name": "backups", "location": "pool", "security": "private", "users": {"sam": "rw"}},
+        {"name": "timemachine", "location": "pool", "security": "private", "users": {"alice": "rw"},
+         "timemachine": {"enabled": True, "max_gb": 500}},
+        {"name": "scans", "location": "system", "security": "public", "browseable": False}]]
+    for s in specs:
+        os.makedirs(S.share_path(s), exist_ok=True)
+    (state / "shares.json").write_text(json.dumps({"shares": [{**s, "path": S.share_path(s)} for s in specs]}))
+    return PreviewNas(), specs
+
+
 # --- the two modes -----------------------------------------------------------------------------------
 def preview(out, pages):
     tmp = pathlib.Path(tempfile.mkdtemp())
     www = prepare_www(tmp)
     state, docker = build_state(tmp, FIXTURE_CATALOG)
     isos, lv = build_vms(tmp)
+    nas, specs = build_nas(tmp, state)
     (tmp / "tokens").mkdir()
     settings = Settings(run_dir=str(tmp), www_dir=str(www), os_release=str(tmp / "os-release"), state_dir=str(state),
                         catalog_dir=str(FIXTURE_CATALOG), logo_path=str(CC.parent / "packages/nimbusos-branding/art/logo.svg"),
                         isos_dir=str(isos), vnc_tokens_dir=str(tmp / "tokens"))
-    app = create_app(settings, privd=FakePrivd({"update.history": HISTORY}), docker=docker, libvirt=lv, bridges=lambda: ["br0"])
+    privd = FakePrivd({"update.history": HISTORY})
+    nas.install(privd)
+    app = create_app(settings, privd=privd, docker=docker, libvirt=lv, bridges=lambda: ["br0"])
+    usage = app.app.state.shares.usage
+    for s, used in zip(specs, (2.9e12, 41e9, 380e9, 212e9, 1.2e9)):
+        usage.cache[S.share_path(s)] = (time.monotonic(), int(used), True)
     server = serve(app)
     codes = app.app.state.codes
     for page in pages:
@@ -292,6 +371,15 @@ def preview(out, pages):
         shot(out / "ui-apps-advanced-800.png", page_url(codes, "apps", SCENES["apps-advanced"][1]), width=800, height=1000)
     if "vms" in pages:
         shot(out / "ui-vms-create-800.png", page_url(codes, "vms", SCENES["vms-create"][1]), width=800, height=1000)
+    if "storage" in pages:
+        shot(out / "ui-storage-share-800.png", page_url(codes, "storage", SCENES["storage-share"][1]), width=800, height=1100)
+        (state / "shares.json").write_text(json.dumps({"shares": []}))          # a NAS not set up yet: the wizard
+        shot(out / "ui-storage-empty.png", page_url(codes, "storage"))
+        shot(out / "ui-storage-wizard.png", page_url(codes, "storage", ["Set up NAS@0", "/dev/sdd*", "/dev/sde*"]), height=1000)
+        shot(out / "ui-storage-wizard-mode.png", page_url(codes, "storage", ["Set up NAS@0", "/dev/sdd*", "/dev/sde*", "Next",
+                                                                               "Pooled + parity*"]), height=1000)
+        shot(out / "ui-storage-wizard-confirm.png", page_url(codes, "storage", [
+            "Set up NAS@0", "/dev/sdd*", "/dev/sde*", "Next", "Pooled + parity*", "Next", "Next", "Next"]), height=1000)
     shot(out / "ui-signed-out.png", "http://127.0.0.1:7777/", width=900, height=500)
     server.should_exit = True
 
@@ -335,7 +423,7 @@ def main(argv):
         return 0
     out = pathlib.Path(argv[1])
     out.mkdir(parents=True, exist_ok=True)
-    preview(out, argv[2:] or ["updates", "apps", "vms"])
+    preview(out, argv[2:] or ["updates", "apps", "vms", "storage", "settings"])
     return 0
 
 

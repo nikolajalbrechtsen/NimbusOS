@@ -14,6 +14,9 @@
 #                      subcommand WORD fail, config_error(text) makes
 #                      "compose config" reject the file
 #         FIXTURE_CATALOG  three demo apps (tests/fixtures/catalog)
+#         FakeNas      privd's storage and Samba verbs with state: disks,
+#                      fstab entries, SMB users, the last applied shares;
+#                      fail[verb] makes a verb fail like privd does
 #         FakeLibvirt  LibvirtApi in memory: domains kept as their real XML
 #                      (read back with vm_xml), volumes, states, VNC ports;
 #                      fail[method] makes a call fail as libvirt would
@@ -21,6 +24,7 @@
 #       without nimbus-update (control-center/tests run in CI as a normal user).
 # =============================================================================
 
+import copy
 import pathlib
 import sys
 
@@ -327,3 +331,108 @@ class FakeLibvirt:
     def delete_volume(self, name):
         self._enter("delete_volume", name)
         del self.volumes[name]
+
+
+# --- storage and Samba (privd) ---------------------------------------------------------------
+TB = 4 * 1000 ** 4
+
+
+def nas_disk(name, role="unassigned", label=None, serial=None, size=TB, system=False, fstype=None):
+    return {"name": name, "path": f"/dev/{name}", "size": size, "model": "WDC WD40EFRX", "serial": serial if serial is not None else f"SN-{name}",
+            "rotational": True, "transport": "sata", "removable": False, "system": system, "live": False,
+            "mounted": role != "unassigned", "mounts": [], "role": role, "label": label, "fstype": fstype, "partitions": [],
+            "smart": {"passed": True, "temperature": 35, "asleep": False}}
+
+
+class FakeNas:
+    """privd's storage and Samba verbs, with state."""
+
+    VERBS = ("disk.list", "disk.format", "disk.mount", "disk.unmount", "disk.smart", "pool.apply", "share.apply",
+             "share.delete_data", "snapraid.status", "snapraid.sync_now", "smbuser.list", "smbuser.add", "smbuser.passwd",
+             "smbuser.delete", "samba.test", "samba.settings")
+
+    def __init__(self):
+        self.disks = [nas_disk("nvme0n1", role="system", system=True), nas_disk("sda", "data", "disk1"), nas_disk("sdb"), nas_disk("sdc"),
+                      nas_disk("sdd", serial="")]
+        self.fstab = [{"kind": "disk", "role": "data", "label": "disk1", "uuid": "u1", "fs": "xfs", "present": True}]
+        self.parity_configured = False
+        self.live = False
+        self.users = {"alice": {"uid": 120, "managed": True, "desktop": False}}
+        self.applied = None
+        self.calls = []
+        self.fail = {}
+
+    def install(self, privd):
+        """Answer these verbs of a FakePrivd from this object."""
+        for verb in self.VERBS:
+            privd.results[verb] = (lambda v: lambda args: self(v, args))(verb)
+        return self
+
+    def __call__(self, verb, args):
+        self.calls.append((verb, copy.deepcopy(args)))
+        if verb in self.fail:
+            raise PrivdError(*self.fail[verb])
+        return getattr(self, verb.replace(".", "_"))(args)
+
+    def disk_list(self, args):
+        return {"disks": self.disks, "fstab": self.fstab, "live": self.live,
+                "pool": {"mounted": any(e["kind"] == "pool" for e in self.fstab), "usage": None, "snapraid": True,
+                         "parity_configured": self.parity_configured}}
+
+    def disk_format(self, args):
+        d = next(x for x in self.disks if x["path"] == args["device"])
+        d.update(role=args["role"], label=args["label"], fstype=args["fs"])
+        self.fstab.append({"kind": "disk", "role": args["role"], "label": args["label"], "uuid": "u", "fs": args["fs"], "present": True})
+        return {"label": args["label"]}
+
+    def pool_apply(self, args):
+        self.fstab = [e for e in self.fstab if e["kind"] != "pool"]
+        if args["mode"] != "single":
+            self.fstab.append({"kind": "pool", "branches": args["data"], "policy": args["policy"]})
+        self.parity_configured = args["mode"] == "parity"
+        return {"mode": args["mode"]}
+
+    def share_apply(self, args):
+        self.applied = args
+        return {"shares": len(args["shares"])}
+
+    def share_delete_data(self, args):
+        return {"deleted": args["name"]}
+
+    def snapraid_status(self, args):
+        return {"configured": True, "running": False, "last": {"last_sync_ok": True}, "diff": {"unprotected": 3}}
+
+    def snapraid_sync_now(self, args):
+        return {"started": True}
+
+    def smbuser_list(self, args):
+        return {"users": [{"name": n, **v} for n, v in sorted(self.users.items())]}
+
+    def smbuser_add(self, args):
+        if args["user"] in self.users:
+            raise PrivdError("invalid_argument", f"'{args['user']}' is already an SMB user.", "user")
+        self.users[args["user"]] = {"uid": 121, "managed": True, "desktop": False}
+        return {"user": args["user"]}
+
+    def smbuser_passwd(self, args):
+        return {"user": args["user"]}
+
+    def smbuser_delete(self, args):
+        self.users.pop(args["user"])
+        return {"user": args["user"]}
+
+    def samba_test(self, args):
+        ok = args["password"] == "c0rrect-H0rse"
+        return {"ok": ok, "shares": ["media"] if ok else [], "message": "Connected." if ok else "Connecting failed."}
+
+    def samba_settings(self, args):
+        return {"applied": True}
+
+    def disk_smart(self, args):
+        return {"passed": True}
+
+    def disk_mount(self, args):
+        return {"label": args["label"]}
+
+    def disk_unmount(self, args):
+        return {"label": args["label"]}

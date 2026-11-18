@@ -1,0 +1,102 @@
+#!/usr/bin/python3
+# =============================================================================
+# /usr/lib/nimbus-control/bin/nimbus-recycle-clean: empty old recycle-bin files
+# =============================================================================
+# What: run daily as root by nimbus-recycle-clean.service. For every share in
+#       /var/lib/nimbus-control/shares.json with its recycle bin on, deletes
+#       files in <share>/.recycle that were moved there more than the share's
+#       retention ago (Samba sets their modification time when it moves them,
+#       "recycle:touch_mtime"), then removes folders left empty. A share
+#       whose disk isn't mounted is skipped.
+#       Every share is checked with the same rules privd uses, and the walk
+#       goes through folder handles without following links: a link placed
+#       in a recycle bin can't make it delete anything elsewhere.
+# Why:  spec Tab C (recycle bin with a retention timer); docs/PLAN.md NOTE-68.
+# =============================================================================
+
+import json
+import os
+import stat
+import sys
+import time
+
+sys.path.insert(0, "/usr/lib/nimbus-control/python")
+
+from nimbus_common import shares as S  # noqa: E402
+from nimbus_common.validate import ValidationError  # noqa: E402
+
+STATE = "/var/lib/nimbus-control/shares.json"
+DAY = 86400
+
+
+def open_below(parent_fd, name):
+    return os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=parent_fd)
+
+
+def clean(share, now):
+    root, available = S.location_root(share["location"])
+    if not available:
+        print(f"{share['name']}: {root} is not mounted; skipped.")
+        return 0
+    cutoff = now - share["recycle"]["days"] * DAY
+    removed = 0
+    try:
+        rfd = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
+    except OSError:
+        return 0
+    try:
+        sfd = open_below(rfd, share["name"])
+        try:
+            bin_fd = open_below(sfd, ".recycle")
+        except FileNotFoundError:
+            os.close(sfd)
+            return 0
+        os.close(sfd)
+    except OSError as exc:
+        print(f"{share['name']}: can't open its recycle bin ({exc.strerror}); skipped.")
+        return 0
+    finally:
+        os.close(rfd)
+    try:
+        for _, dirs, files, dfd in os.fwalk(".", topdown=False, dir_fd=bin_fd):
+            for name in files:
+                try:
+                    st = os.stat(name, dir_fd=dfd, follow_symlinks=False)
+                    if st.st_mtime < cutoff:
+                        os.unlink(name, dir_fd=dfd)
+                        removed += 1
+                except FileNotFoundError:
+                    pass
+            for name in dirs:
+                try:
+                    if stat.S_ISDIR(os.stat(name, dir_fd=dfd, follow_symlinks=False).st_mode):
+                        os.rmdir(name, dir_fd=dfd)          # only when empty
+                except OSError:
+                    pass
+    finally:
+        os.close(bin_fd)
+    if removed:
+        print(f"{share['name']}: removed {removed} file(s) older than {share['recycle']['days']} days from .recycle")
+    return removed
+
+
+def main():
+    try:
+        with open(STATE, encoding="utf-8") as f:
+            shares = json.load(f).get("shares", [])
+    except FileNotFoundError:
+        return 0
+    now = time.time()
+    for raw in shares:
+        try:
+            share = S.share_spec(raw)
+        except ValidationError as exc:
+            print(f"Skipping a share that isn't valid: {exc.message}", file=sys.stderr)
+            continue
+        if share["recycle"]["enabled"]:
+            clean(share, now)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

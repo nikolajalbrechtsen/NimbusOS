@@ -1,0 +1,47 @@
+#!/bin/bash
+# =============================================================================
+# /usr/lib/nimbus-control/bin/nimbus-netfix: VM traffic through Docker's firewall
+# =============================================================================
+# What: run by nimbus-netfix.service each time Docker starts. Docker sets the
+#       FORWARD policy to DROP, which also drops the traffic of libvirt's NAT
+#       network and of VMs on a bridge. In Docker's DOCKER-USER chain (the
+#       place Docker documents for such rules) this accepts:
+#         - everything coming from libvirt's networks (virbr*), and replies
+#           going back to them;
+#         - frames switched inside the user's own bridges (br0 and the like;
+#           not Docker's docker0/br-* or libvirt's virbr*).
+#       Each rule is added once (iptables -C first), so running it again
+#       changes nothing. Without a DOCKER-USER chain (Docker not running)
+#       there is nothing to fix.
+# Why:  docs/PLAN.md NOTE-19.
+# =============================================================================
+set -euo pipefail
+
+IPTABLES=/usr/sbin/iptables
+CHAIN=DOCKER-USER
+
+if ! "$IPTABLES" -w -n -L "$CHAIN" >/dev/null 2>&1; then
+	echo "nimbus-netfix: there is no $CHAIN chain (Docker isn't running); nothing to do."
+	exit 0
+fi
+
+rule() {
+	if ! "$IPTABLES" -w -C "$CHAIN" "$@" 2>/dev/null; then
+		"$IPTABLES" -w -I "$CHAIN" 1 "$@"
+		echo "nimbus-netfix: added $*"
+	fi
+}
+
+rule -i virbr+ -j ACCEPT
+rule -o virbr+ -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT
+for flag in /sys/class/net/*/bridge; do
+	[[ -d "$flag" ]] || continue
+	bridge="$(basename "$(dirname "$flag")")"
+	case "$bridge" in
+		virbr*|docker*|br-*) continue ;;
+	esac
+	# With br_netfilter (Docker loads it), switched frames show the bridge
+	# as both the in and the out interface.
+	rule -i "$bridge" -o "$bridge" -j ACCEPT
+done
+echo "nimbus-netfix: libvirt guests can forward traffic while Docker runs."

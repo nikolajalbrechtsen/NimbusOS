@@ -2,6 +2,9 @@ control-center/bin/nimbus-migrate usr/lib/nimbus-control/bin/
 control-center/bin/nimbus-control-server usr/lib/nimbus-control/bin/
 control-center/bin/nimbus-control-open usr/lib/nimbus-control/bin/
 control-center/bin/nimbus-grant-access usr/lib/nimbus-control/bin/
+control-center/bin/nimbus-netfix usr/lib/nimbus-control/bin/
+control-center/bin/nimbus-snapraid-run usr/lib/nimbus-control/bin/
+control-center/bin/nimbus-recycle-clean usr/lib/nimbus-control/bin/
 control-center/migrations/*.py usr/lib/nimbus-control/migrations/
 control-center/backend/nimbus_control usr/lib/nimbus-control/python/
 control-center/common/nimbus_common usr/lib/nimbus-control/python/
