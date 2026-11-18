@@ -22,6 +22,12 @@
 #         - privd's stack verbs, called by the service user, hand a folder
 #           in /var/lib/nimbus-control/stacks to a container's uid and
 #           delete a stack folder holding files the service user can't touch;
+#         - the VM API answers "libvirt isn't running" without failing; noVNC
+#           and the console page are served; a chunked ISO upload lands in
+#           /var/lib/nimbus-vms/isos as nimbus-control:nimbus-smb 0644 and
+#           can be deleted; websockify, started as its unit starts it, finds
+#           a token file in /run/nimbus-control/vnc-tokens and proxies to the
+#           VNC target, and refuses an unknown token;
 #         - a desktop user in the nimbus-control group can open the socket but
 #           privd refuses them (SO_PEERCRED);
 #         - privd audited each request.
@@ -115,6 +121,54 @@ check "the apps list says Docker isn't running, and doesn't fail" \
 	python3 -c 'import json,sys; s=json.loads(sys.argv[1]); assert s["apps"] == [] and not s["docker"]["ok"] and "systemctl start docker" in s["docker"]["message"]' "$apps"
 check "the catalog is empty without nimbus-catalog" \
 	python3 -c 'import json,sys; assert json.loads(sys.argv[1]) == {"apps": [], "errors": []}' "$(api http://127.0.0.1:7777/api/catalog)"
+
+echo "Virtual machines"
+for page in views/vms.js console.html console.js lib/vnc.js novnc/core/rfb.js; do
+	check "/$page is served" curl -fsS -o /dev/null "http://127.0.0.1:7777/$page"
+done
+vms="$(api http://127.0.0.1:7777/api/vms || true)"
+check "the VM list says libvirt isn't running, and doesn't fail" \
+	python3 -c 'import json,sys; s=json.loads(sys.argv[1]); assert s["vms"] == [] and not s["libvirt"]["ok"] and "libvirtd" in s["libvirt"]["message"]' "$vms"
+ISOS=/var/lib/nimbus-vms/isos
+head -c 3145728 /dev/urandom >"$WORK/smoke.iso"
+begin="$(api -X POST -H 'Content-Type: application/json' -d '{"name": "smoke.iso", "size": 3145728}' \
+	http://127.0.0.1:7777/api/isos/uploads || true)"
+uid="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1])["id"])' "$begin" 2>/dev/null || true)"
+api -X PUT -H 'Content-Type: application/octet-stream' --data-binary @"$WORK/smoke.iso" \
+	"http://127.0.0.1:7777/api/isos/uploads/$uid?offset=0" >/dev/null || true
+api -X POST "http://127.0.0.1:7777/api/isos/uploads/$uid/finish" >/dev/null || true
+check "an uploaded ISO is nimbus-control:nimbus-smb 0644 in $ISOS" \
+	test "$(stat -c '%U:%G %a' "$ISOS/smoke.iso" 2>&1)" = "nimbus-control:nimbus-smb 644"
+check "it arrived byte for byte, with no unfinished upload left" \
+	sh -c 'cmp -s "$1" "$2/smoke.iso" && [ -z "$(find "$2" -name ".upload-*")" ]' _ "$WORK/smoke.iso" "$ISOS"
+check "the ISO library lists it" sh -c 'curl -fsS -H "Authorization: Bearer $1" http://127.0.0.1:7777/api/isos | grep -q "\"smoke.iso\""' _ "$TOKEN"
+api -X DELETE http://127.0.0.1:7777/api/isos/smoke.iso >/dev/null || true
+check "deleting it removes the file" test ! -e "$ISOS/smoke.iso"
+# websockify exactly as nimbus-websockify.service starts it, and a VNC stand-in.
+"${AS_SERVICE[@]}" /usr/bin/websockify --token-plugin=TokenFile --token-source=/run/nimbus-control/vnc-tokens \
+	127.0.0.1:6080 >"$WORK/websockify.log" 2>&1 &
+pids+=($!)
+python3 -c '
+import socket
+s = socket.socket(); s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1); s.bind(("127.0.0.1", 5999)); s.listen()
+held = []
+while True:
+    c, _ = s.accept(); c.sendall(b"RFB 003.008\n"); held.append(c)' &
+pids+=($!)
+for _ in $(seq 50); do python3 -c 'import socket; socket.create_connection(("127.0.0.1", 6080), 1)' 2>/dev/null && break; sleep 0.2; done
+echo "smoke-console-token-0123456789: 127.0.0.1:5999" | "${AS_SERVICE[@]}" tee /run/nimbus-control/vnc-tokens/smoke >/dev/null
+check "websockify (as nimbus-control) proxies a console token to its VNC server" python3 -c '
+import websockets.sync.client as c
+with c.connect("ws://127.0.0.1:6080/websockify?token=smoke-console-token-0123456789", subprotocols=["binary"]) as ws:
+    assert ws.recv(timeout=10) == b"RFB 003.008\n"'
+check "websockify refuses an unknown token" python3 -c '
+import websockets.sync.client as c
+try:
+    with c.connect("ws://127.0.0.1:6080/websockify?token=guess", subprotocols=["binary"]) as ws:
+        ws.recv(timeout=5)
+except Exception:
+    raise SystemExit(0)
+raise SystemExit(1)'
 
 echo "privd"
 # client.py [VERB ARGS_JSON]: one request, prints the reply line.

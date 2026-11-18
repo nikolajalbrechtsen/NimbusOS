@@ -89,14 +89,15 @@ NimbusOS/
 ├── control-center/
 │   ├── backend/nimbus_control/       FastAPI: app.py, auth.py, errors.py, config.py, fonts.py, privd_client.py,
 │   │                                 system_service.py, updates_service.py, state.py, jobs.py; Apps: catalog.py,
-│   │                                 manifest.py, compose.py, docker_api.py, apps_service.py; later:
-│   │                                 metrics_service.py, vm_service.py, storage_service.py, shares_service.py
+│   │                                 manifest.py, compose.py, docker_api.py, apps_service.py; VMs: vm_service.py,
+│   │                                 vm_xml.py, libvirt_api.py, iso_library.py; later: metrics_service.py,
+│   │                                 storage_service.py, shares_service.py
 │   ├── common/nimbus_common/         shared by backend and privd: validate.py, protocol.py (privd wire format);
 │   │                                 later: the smb.conf renderer, schemas
 │   ├── privd/                        nimbus-privd.py + nimbus_privd/ (server, registry, runner, audit, updates,
 │   │                                 system, stacks; later: disks, pool, samba, smbusers)
-│   ├── frontend/                     index.html, console.html, style.css, app.js,
-│   │                                 lib/{api,ui,icons,charts}.js,
+│   ├── frontend/                     index.html, console.html + console.js (pop-out VM console), style.css, app.js,
+│   │                                 lib/{api,ui,icons,vnc,charts}.js,
 │   │                                 views/{dashboard,apps,vms,storage,updates,settings}.js
 │   ├── bin/                          nimbus-control-server, nimbus-control-open (launcher), nimbus-migrate,
 │   │                                 nimbus-snapraid-run, nimbus-recycle-clean, nimbus-netfix, nimbus-grant-access
@@ -108,6 +109,7 @@ NimbusOS/
 │   └── tests/                        pytest (no network, no root; Docker/libvirt/privd faked); ui_preview.py (screenshots)
 │       ├── fixtures/catalog/                         three demo apps for the Apps tests and screenshots
 │       ├── integration/installed-smoke.sh            the installed package, run as its units would run it
+│       ├── integration/vm-libvirt.sh                 a real libvirtd: VMs, firmware, TPM, websockify, live console shots
 │       └── integration/samba-ucf-keeps-include.sh   CI: a ucf-managed smb.conf update keeps the include (NOTE-23)
 │
 ├── catalog/
@@ -651,6 +653,46 @@ Until batch 5, the router shows a clear "could not be shown" state for a page wh
 - **Live logs:** `docker compose logs --follow --tail 200`, stopped as soon as the window closes, not at the next log line.
 - **What batch 4 must provide:** `shares.json` entries need `name` and `path`. Other fields are ignored here. `share_hint` matches `name`.
 
+**NOTE-67 — Control Center, batch 3 of 5: Virtual Machines.** The page has a Machines list, an ISO library, a Create VM wizard, VM options and an embedded console. The backend is `libvirt_api.py`, `vm_xml.py`, `vm_service.py` and `iso_library.py`. The frontend is `views/vms.js` and `lib/vnc.js`, plus `console.html` and `console.js` for the pop-out window. Checked against Trixie's libvirt 11.3.0, QEMU 10.0.13, OVMF 2025.02, swtpm 0.7.1, noVNC 1.6.0 and websockify 0.12.0.
+- **No root, no privd.** `nimbus-control` reaches `qemu:///system` as a member of the `libvirt` group: `libvirtd.socket` is 0666, and Debian's polkit rule `60-libvirt.rules` allows that group. VMs, their disks and the disk pool are therefore made by libvirtd itself, and this batch adds no privd verbs.
+  - The `nimbus-images` pool (a directory pool on `/var/lib/nimbus-vms/images`) is defined, set to autostart and started on first use, through the libvirt API. No maintainer script is involved.
+  - ISO uploads are written by the backend itself: `/var/lib/nimbus-vms/isos` is `root:nimbus-smb` 2775, the service user is in `nimbus-smb`, and the folder is in its `ReadWritePaths=`.
+- **Domain XML is built with ElementTree** (`vm_xml.py`), so every value is escaped by the XML writer. Both presets use the q35 machine.
+  - **UEFI** uses libvirt's firmware autoselection (`<os firmware="efi">`) from OVMF's descriptors in `/usr/share/qemu/firmware`. Linux turns Secure Boot off, so libvirt picks `OVMF_CODE_4M.fd`. Windows turns it on with enrolled keys, so libvirt picks `OVMF_CODE_4M.ms.fd` with Microsoft's keys, and SMM is on. The test against real libvirt showed the choice is made when the VM is defined.
+  - **Windows** also gets TPM 2.0 through swtpm (`tpm-crb` with UEFI, `tpm-tis` with BIOS) and the Hyper-V enlightenments relaxed, vapic, spinlocks (8191), vpindex, runtime, synic, stimer, reset, frequencies, tlbflush and ipi. Its clock is local time with `hypervclock`.
+  - **Linux** gets virtio disk, network, graphics and RNG, and a UTC clock.
+  - **Always:** the disk boots first and the CD second, so an installed system boots from its disk with the ISO still in the drive. VNC listens on 127.0.0.1 with a random 8-character password (NOTE-16). A USB tablet keeps the console pointer aligned. There is a memory balloon with statistics, a guest-agent channel, and the preset in metadata under `urn:nimbusos:vm:1`.
+  - libvirt's own schema (`virt-xml-validate`) accepts all 24 combinations of preset, firmware, driver ISO, network and KVM or TCG.
+- **Deviation: Windows without the virtio-win driver ISO.** The spec asks for virtio drivers in the Windows preset, but Windows Setup can't see a virtio disk without them, and Debian doesn't package virtio-win.
+  - With a driver ISO (from Fedora's virtio-win), the VM uses a virtio disk and network, and the ISO sits in a second CD drive for Setup's "Load driver".
+  - Without one, the VM uses SATA and e1000e, which Setup finds on its own. The wizard says which applies and suggests a `*virtio-win*` ISO when the library has one.
+- **No hardware virtualization.** When libvirt reports no KVM (VT-x or AMD-V off in the firmware, or no `/dev/kvm`), VMs are defined as TCG domains without `host-passthrough`. They are very slow, and a banner says how to turn KVM on. This is also how the real-libvirt test runs in a container.
+- **Create VM** checks every setting and names the field:
+  - name, preset, vCPUs (up to the host's threads), memory (256 MiB up to the host's RAM) and disk (1 GiB to 64 TiB, thin qcow2);
+  - firmware (UEFI only with OVMF present);
+  - NAT (needs libvirt's `default` network) or a bridge that exists on the host (not `virbr*`, `docker*` or `br-*`);
+  - ISOs from the library.
+  - If libvirt refuses the domain, the new disk is deleted again. A VM that doesn't start is kept, and the message says why.
+  - A disk name never reuses a disk kept from a deleted VM: `<name>.qcow2`, then `<name>-2.qcow2`, and so on.
+- **The list** shows every VM on `qemu:///system`, including ones made with virt-manager. Each shows its state (paused VMs with the reason, for example a disk error), its CD, and live CPU (as % of its own vCPUs and of the host) and memory (`balloon.rss`), from successive `getAllDomainStats()` samples (§4.4). Batch 5's collector reuses `LibvirtApi.stats()`.
+- **Actions:** Start, Shut down (ACPI; the guest decides, and the message says to use Force off if it doesn't react), Restart, Force off (with a confirmation), Resume, and Options (change or eject the CD while running; start with the computer).
+- **Delete** turns the VM off and removes it with its UEFI variables, TPM state and saved state. The disk is deleted only when ticked and the name is typed, and only disks in the `nimbus-images` pool; others are listed as kept.
+- **Console:**
+  - `POST /api/vms/<name>/console` writes one websockify token file per VM to `/run/nimbus-control/vnc-tokens/<uuid>`: `<token>: <host>:<port>`, written atomically, mode 0640. It returns the WebSocket path and the VNC password.
+  - A new console replaces the VM's previous token. Tokens of VMs that stopped are removed when the list refreshes, and all tokens at service start.
+  - websockify (`TokenFile`, which re-reads the folder on every connection) refuses unknown tokens. The VNC password is a second lock.
+  - The CSP's `connect-src` now also allows `ws://127.0.0.1:6080` and `ws://localhost:6080`.
+  - The packaged noVNC is served from `/usr/share/novnc` at `/novnc/`. `lib/vnc.js` loads `/novnc/core/rfb.js`. The console opens in a large modal, with Ctrl+Alt+Del, full screen and pop out.
+  - The pop-out `console.html` inherits the session, because `sessionStorage` is copied into windows a page opens, so the window is opened without `noopener`.
+- **ISO uploads:**
+  - Uploads come in 8 MiB chunks, at most 16 MiB per request and in order, with progress. Closing the drawer cancels.
+  - The limit is 32 GiB per file (`NIMBUS_CONTROL_ISO_MAX_BYTES`). An upload is refused when the free space is less than its size plus 256 MiB.
+  - Every file is opened relative to a handle on the folder with `O_NOFOLLOW`, and names are plain file names. A link planted in the folder (it is writable over SMB) is never followed, listed or deleted through. A part file swapped for a link stops the upload.
+  - Finishing uses a hard link, so it never replaces a file that appeared meanwhile; `rename` is the fallback where hard links don't exist. Finished files are 0644 so QEMU can read them.
+  - Unfinished uploads are removed after an hour without data, and at service start.
+  - An ISO in a VM's CD drive can't be deleted until it is ejected.
+- **What batch 4 must provide:** the `isos` share should create files readable by others (0644), so QEMU (`libvirt-qemu`) can read ISOs copied in over SMB.
+
 ### Found by the Trixie archive check (deliverable 3)
 
 **NOTE-51 — `wsdd2` instead of `wsdd`.** Trixie has no `wsdd` package (§7). `wsdd2` (1.8.7, main) serves the same purpose: it makes the machine show up under Network in Windows Explorer through WS-Discovery. The storage list, the `nimbus-control` Depends, the services table, the alert rules and the Settings page all use `wsdd2` and its unit, `wsdd2.service`.
@@ -899,6 +941,31 @@ How to read it: the NimbusOS and Docker repositories offer `bash` 99.0 and 98.0,
   - a bad name in a plan request gave 500 instead of 422; `ValidationError` now maps to 422 everywhere;
   - a broken catalog JSON file's error didn't name the app.
 
+**Deliverable 8, batch 3** (Virtual Machines, 2026-11-18, `dev-shell.sh`, NOTE-67):
+- **pytest, 310 passed** (92 new); 11 are skipped here: 4 need Docker's CLI and 7 need a running libvirtd. The new tests:
+  - `test_vm_xml` (33): both presets with every option, VNC local with its password, escaping, reading VMs made by other tools. 24 of them run libvirt's `virt-xml-validate` on every valid combination.
+  - `test_isos` (22): a chunked upload byte for byte and 0644; 11 bad names; sizes and free space; order; never replacing a file; links in three places; cancel and cleanups.
+  - `test_vms` (37): the API through the real app with `FakeLibvirt`, which keeps each domain as its real XML. It covers the list and usage maths, libvirt down, no KVM, 18 refused settings with their field, a refused domain leaving no disk, actions, CD and autostart, delete with and without disks (never outside the pool), console token files, ISO upload over HTTP, used-by, the token requirement, noVNC, the CSP and the sidebar count.
+- **Against a real libvirtd** (`tests/integration/vm-libvirt.sh` in a privileged throwaway container: libvirt 11.3.0, QEMU 10.0.13, TCG because the container can't use `/dev/kvm`): `test_vm_libvirt`, 7 passed. Checked:
+  - a Linux UEFI VM, a Windows VM (`OVMF_CODE_4M.ms.fd`, `secure='yes'`, swtpm state) and a BIOS VM all start and run;
+  - CPU time moves; the CD is ejected and inserted live; reboot, shutdown, force off and autostart work;
+  - a console token reaches the VM's VNC server through websockify, which offers VNC password authentication; a wrong token is refused;
+  - deleting with the disk removes the disk, the UEFI variables and the TPM state.
+  - Container-only settings in `qemu.conf` (QEMU as root, no cgroups, AppArmor or xattrs) are explained in the script.
+- **The live console, looked at:** `ui_preview.py --live-vm` started a real VM and the real backend and websockify, then took screenshots over the DevTools protocol after real seconds. They show the VM list with live CPU (40 %) and RAM (137 MiB of 512 MiB), and the console modal showing the VM's UEFI shell, connected with the VNC password through noVNC 1.6.0 from `/novnc/`.
+- **`installed-smoke.sh`, 32 passed** (12 new). The new checks:
+  - the VM page, console page, `lib/vnc.js` and noVNC are served;
+  - the VM list answers "libvirt isn't running" without failing;
+  - a chunked ISO upload lands in `/var/lib/nimbus-vms/isos` as `nimbus-control:nimbus-smb` 0644, byte for byte, with no part file left, is listed, and can be deleted;
+  - websockify, started exactly as `nimbus-websockify.service` starts it (as `nimbus-control`), reads a token file from `/run/nimbus-control/vnc-tokens`, proxies to a VNC stand-in, and refuses an unknown token.
+- **Package:** `nimbus-control` builds and is lintian-clean. The maintainer-script test passes 82 of 82. Every frontend module parses.
+- **Screenshots looked at** (fake data): the Machines list (running with usage, paused on a disk error, stopped Windows that starts with the computer, a virt-manager VM) at 1400 and 800 px, the ISO library, Create VM for Linux and for Windows, Options and Delete. Fixed after looking:
+  - VM names were cut to three letters;
+  - the table ran off the window at 800 px, so the Resources column now hides under 1100 px;
+  - "64 GiB" broke over two lines;
+  - a driver option was too long for its field.
+  - Choosing Windows now also suggests a Windows ISO and the virtio-win ISO from the library.
+
 **os-release, unattended-upgrades, Docker and Calamares** (`os-identity.test.sh`, NimbusOS os-release installed). Excerpts:
 
 ```
@@ -953,7 +1020,7 @@ Facts confirmed by reading live-build `1:20250505+deb13u1`'s own scripts and Deb
 | 5 | Debian packaging (7 packages), in three parts | **Part 1:** `packages/{nimbusos-archive-keyring,nimbusos-docker-keyring,nimbusos-release,nimbusos-desktop}/**` (os-release, source, pinning with the `apt-cache policy` proof, unattended-upgrades drop-ins, `nimbus-update`, timers, Flathub setup, tests), plus `build-debs.sh` token rendering, mode normalization and `--only`. **Part 2 (done):** `packages/nimbusos-branding/**` (all themes and art, CC-BY-SA-4.0 text from SPDX, install test). **Part 3 (done):** `packages/{nimbus-control,nimbus-catalog}/{debian,tests}/**`, plus the parts of `control-center/` the packaging runs: `systemd/*` (all units), `data/samba/nimbus.conf`, `bin/nimbus-migrate`, `migrations/0001_initial.py` and `tests/test_migrate.py` (NOTE-58 to NOTE-61) |
 | 6 | Live hooks (done) | `build/config/hooks/live/{0100,0200,0300,0900}-*.hook.chroot`, `nimbus_check_image_initrd` in `build/lib/common.sh` (instead of a hook 9990, NOTE-62), `tools/tests/{hooks,image-initrd-check}.test.sh` |
 | 7 | Live-only files and boot menus (done) | `build/config/includes.chroot_after_packages/**`, `build/config/bootloaders/**`, hook `0400-live-manifest`, the verify hook's installer checks, `--bootappend-live-failsafe` and `nimbus_prepare_grub_theme` in `build/lib/common.sh`, `tools/tests/{live-files,bootloaders}.test.sh` (NOTE-63, NOTE-64) |
-| 8 | Nimbus Control Center, in five batches (NOTE-65) | **Batch 1 (done):** backend core (app, auth, errors, config, fonts, privd client, system, updates), `nimbus_common` (validate, protocol), privd (server, registry, runner, audit, updates, system), launcher and Grant access, desktop file and polkit action, the whole design system (`style.css`, `lib/{api,ui,icons}.js`, `app.js`), `views/updates.js`, tests. **Batch 2 (done, NOTE-66):** `backend/nimbus_control/{manifest,catalog,compose,apps_service,jobs,docker_api,state}.py`, privd `stacks.py`, the validators for apps, form components in `lib/ui.js`, `views/apps.js`, the fixture catalog and `test_{manifest,compose,apps}.py`, privd stack tests, Apps checks in `installed-smoke.sh`, Apps scenes in `ui_preview.py`. **Batch 3:** VMs. **Batch 4:** Storage, Shares, Settings. **Batch 5:** Dashboard and metrics. Each batch adds its lines to `packages/nimbus-control/debian/install` (NOTE-61) |
+| 8 | Nimbus Control Center, in five batches (NOTE-65) | **Batch 1 (done):** backend core (app, auth, errors, config, fonts, privd client, system, updates), `nimbus_common` (validate, protocol), privd (server, registry, runner, audit, updates, system), launcher and Grant access, desktop file and polkit action, the whole design system (`style.css`, `lib/{api,ui,icons}.js`, `app.js`), `views/updates.js`, tests. **Batch 2 (done, NOTE-66):** `backend/nimbus_control/{manifest,catalog,compose,apps_service,jobs,docker_api,state}.py`, privd `stacks.py`, the validators for apps, form components in `lib/ui.js`, `views/apps.js`, the fixture catalog and `test_{manifest,compose,apps}.py`, privd stack tests, Apps checks in `installed-smoke.sh`, Apps scenes in `ui_preview.py`. **Batch 3 (done, NOTE-67):** `backend/nimbus_control/{libvirt_api,vm_xml,vm_service,iso_library}.py`, the VM validators and settings, `views/vms.js`, `lib/vnc.js`, `console.{html,js}`, the CSP for websockify, `test_{vm_xml,isos,vms,vm_libvirt}.py`, `tests/integration/vm-libvirt.sh`, VM checks in `installed-smoke.sh`, VM scenes and `--live-vm` in `ui_preview.py`. **Batch 4:** Storage, Shares, Settings. **Batch 5:** Dashboard and metrics. Each batch adds its lines to `packages/nimbus-control/debian/install` (NOTE-61) |
 | 9 | Catalog | `catalog/SCHEMA.md`, `catalog/manifest.schema.json` (with `template_version`, NOTE-60), 10 apps |
 | 10 | CI/CD and docs (CI also runs `tools/tests/*.test.sh` and `tools/fetch-docker-key.sh --verify-local` / `--check`) | `.github/workflows/*`, `.github/dependabot.yml`, `apt/conf/*`, `tools/{publish-apt.sh,releases-json.py,split-iso.sh,pin-actions.sh}`, `control-center/tests/integration/samba-ucf-keeps-include.sh`, `README.md`, `LICENSE`, `LICENSES/*`, `.shellcheckrc`, `ruff.toml`, `docs/{RELEASING,SIGNING}.md`, `docs/release-notes/v0.1.0.md` |
 | 11 | Testing (the smoke test includes `systemctl --user show-environment \| grep XDG_CONFIG_DIRS` and kinfocenter's About page after a graphical login, NOTE-55) | `docs/TESTING.md`, `tools/qemu-test.sh` |

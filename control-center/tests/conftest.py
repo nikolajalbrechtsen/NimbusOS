@@ -14,6 +14,9 @@
 #                      subcommand WORD fail, config_error(text) makes
 #                      "compose config" reject the file
 #         FIXTURE_CATALOG  three demo apps (tests/fixtures/catalog)
+#         FakeLibvirt  LibvirtApi in memory: domains kept as their real XML
+#                      (read back with vm_xml), volumes, states, VNC ports;
+#                      fail[method] makes a call fail as libvirt would
 # Why:  backend tests run without root, without a socket, without Docker and
 #       without nimbus-update (control-center/tests run in CI as a normal user).
 # =============================================================================
@@ -169,3 +172,158 @@ def docker_cli(tmp_path, monkeypatch):
     monkeypatch.setattr(apps_service, "DOCKER", str(program))
     monkeypatch.setattr(compose, "DOCKER", str(program))
     return DockerCli(log, monkeypatch)
+
+
+# --- libvirt ---------------------------------------------------------------------------
+class FakeLibvirt:
+    def __init__(self, kvm=True, efi=True, threads=8, memory=16 * 1024 ** 3, nat=True,
+                 images_dir="/var/lib/nimbus-vms/images"):
+        self.host_info = {"kvm": kvm, "efi": efi, "threads": threads, "memory": memory}
+        self.nat = nat
+        self.images_dir = images_dir
+        self.vms = {}            # name -> {"xml", "state", "autostart", "uuid", "cpu_time", "reason"}
+        self.volumes = {}        # volume name -> capacity
+        self.calls = []
+        self.fail = {}           # method -> message (raised as VmError)
+        self.available = True
+
+    def _enter(self, method, *args):
+        from nimbus_control.libvirt_api import UNAVAILABLE, LibvirtUnavailable, VmError
+        self.calls.append((method, *args))
+        if not self.available:
+            raise LibvirtUnavailable(UNAVAILABLE)
+        if method in self.fail:
+            raise VmError(self.fail[method])
+
+    def _vm(self, name):
+        from nimbus_control.libvirt_api import VmNotFound
+        if name not in self.vms:
+            raise VmNotFound(f"Domain not found: no domain with matching name '{name}'")
+        return self.vms[name]
+
+    def host(self):
+        self._enter("host")
+        return dict(self.host_info)
+
+    def nat_network(self):
+        self._enter("nat_network")
+        return {"exists": self.nat, "active": self.nat}
+
+    def count(self):
+        self._enter("count")
+        return len(self.vms)
+
+    def domains(self):
+        import xml.etree.ElementTree as ET
+        from nimbus_control import vm_xml
+        self._enter("domains")
+        out = []
+        for name, vm in self.vms.items():
+            info = vm_xml.parse_domain(vm["xml"])
+            root = ET.fromstring(vm["xml"])
+            for disk in info["disks"]:
+                if disk.get("pool") == "nimbus-images" and disk.get("volume") in self.volumes:
+                    disk.update(path=f"{self.images_dir}/{disk['volume']}", capacity=self.volumes[disk["volume"]],
+                                allocation=0, in_pool=True)
+                elif disk.get("path"):
+                    disk.update(capacity=8 * 1024 ** 3, allocation=0, in_pool=False)
+            unit = {"KiB": 1024, "MiB": 1024 ** 2, "GiB": 1024 ** 3}[root.find("memory").get("unit", "KiB")]
+            out.append({"name": name, "uuid": vm["uuid"], "state": vm["state"], "reason": vm.get("reason", ""),
+                        "autostart": vm["autostart"], "persistent": True, "vcpus": int(root.findtext("vcpu")),
+                        "memory": int(root.findtext("memory")) * unit, **info})
+        return out
+
+    def stats(self):
+        import xml.etree.ElementTree as ET
+        self._enter("stats")
+        out = {}
+        for vm in self.vms.values():
+            if vm["state"] in ("running", "paused"):
+                vcpus = int(ET.fromstring(vm["xml"]).findtext("vcpu"))
+                out[vm["uuid"]] = {"cpu_time": vm["cpu_time"], "vcpus": vcpus, "rss": 512 * 1024 ** 2, "memory": 1024 ** 3}
+        return out
+
+    def vnc_target(self, name):
+        from nimbus_control import vm_xml
+        self._enter("vnc_target", name)
+        vm = self._vm(name)
+        vnc = vm_xml.parse_domain(vm["xml"])["vnc"]
+        if vm["state"] not in ("running", "paused") or not vnc:
+            return None
+        return "127.0.0.1", 5900 + sorted(self.vms).index(name), vnc["password"]
+
+    def define(self, xml):
+        import xml.etree.ElementTree as ET
+        from nimbus_control.libvirt_api import VmError
+        self._enter("define", xml)
+        root = ET.fromstring(xml)
+        name = root.findtext("name")
+        if name in self.vms:
+            raise VmError(f"operation failed: domain '{name}' already exists")
+        self.vms[name] = {"xml": xml, "state": "stopped", "autostart": False, "uuid": root.findtext("uuid"), "cpu_time": 0}
+        return name
+
+    def _set(self, method, name, want, new):
+        from nimbus_control.libvirt_api import VmError
+        self._enter(method, name)
+        vm = self._vm(name)
+        if want and vm["state"] not in want:
+            raise VmError(f"Requested operation is not valid: domain is {vm['state']}")
+        vm["state"] = new
+
+    def start(self, name):
+        self._set("start", name, ("stopped", "crashed"), "running")
+
+    def shutdown(self, name):
+        self._set("shutdown", name, ("running",), "running")       # the guest decides; nothing happens at once
+
+    def force_off(self, name):
+        self._set("force_off", name, ("running", "paused", "stopping"), "stopped")
+
+    def reboot(self, name):
+        self._set("reboot", name, ("running",), "running")
+
+    def resume(self, name):
+        self._set("resume", name, ("paused",), "running")
+
+    def set_autostart(self, name, enabled):
+        self._enter("set_autostart", name, enabled)
+        self._vm(name)["autostart"] = enabled
+
+    def undefine(self, name):
+        self._enter("undefine", name)
+        self._vm(name)
+        del self.vms[name]
+
+    def change_cdrom(self, name, dev, bus, path):
+        import xml.etree.ElementTree as ET
+        from nimbus_control import vm_xml
+        self._enter("change_cdrom", name, dev, bus, path)
+        vm = self._vm(name)
+        root = ET.fromstring(vm["xml"])
+        devices = root.find("devices")
+        for i, d in enumerate(list(devices)):
+            if d.tag == "disk" and d.get("device") == "cdrom" and d.find("target").get("dev") == dev:
+                boot = d.find("boot")
+                devices.remove(d)
+                devices.insert(i, vm_xml.cdrom_xml(dev, bus, path, boot.get("order") if boot is not None else None))
+        vm["xml"] = ET.tostring(root, encoding="unicode")
+
+    def ensure_pool(self):
+        self._enter("ensure_pool")
+
+    def pool_free(self):
+        self._enter("pool_free")
+        return 200 * 1024 ** 3
+
+    def create_volume(self, base, size_bytes):
+        self._enter("create_volume", base, size_bytes)
+        name, n = f"{base}.qcow2", 2
+        while name in self.volumes:
+            name, n = f"{base}-{n}.qcow2", n + 1
+        self.volumes[name] = size_bytes
+        return name, f"{self.images_dir}/{name}"
+
+    def delete_volume(self, name):
+        self._enter("delete_volume", name)
+        del self.volumes[name]

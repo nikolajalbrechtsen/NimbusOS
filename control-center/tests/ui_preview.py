@@ -1,29 +1,43 @@
 # =============================================================================
 # control-center/tests/ui_preview.py: screenshots of the Control Center UI
 # =============================================================================
-# What: serves the real frontend and backend on 127.0.0.1:7777 with FakePrivd
-#       (canned update status and history), FakeDocker (four installed demo
-#       apps: running, error, starting and stopped; one with a template
-#       update) and the fixture catalog, then takes screenshots with headless
-#       Chromium:
-#         - each page given on the command line at 1400x900 and at full height
-#           (1400x1800), and at 800 px (the narrow layout);
-#         - "scenes": a page plus buttons to press, in order (by their text,
-#           "@N" for the Nth match): the Apps catalog, Advanced install with
-#           its Compose tab, the template diff;
+# What: serves the real frontend and backend on 127.0.0.1:7777 and takes
+#       screenshots with headless Chromium.
+#       Default mode, on made-up data: FakePrivd (canned update status and
+#       history), FakeDocker (four demo apps: running, error, starting and
+#       stopped; one with a template update), the fixture catalog, and a
+#       FakeLibvirt with four VMs (running Linux with usage, paused on a disk
+#       error, stopped Windows that starts with the computer, one made by
+#       another tool) and three ISOs:
+#         - each page given on the command line at 1400x900, at full height
+#           (1400x1800) and at 800 px (the narrow layout);
+#         - "scenes": a page plus buttons to press, in order (by their text
+#           or, for icon buttons, their label; "@N" for the Nth match, a
+#           trailing "*" for "starts with"): the Apps catalog, Advanced
+#           install, its Compose tab, the template diff; the ISO library,
+#           Create VM (Linux and Windows), VM options, deleting a VM;
 #         - the signed-out page.
-#       Animations are off (reduced motion), so nothing is caught mid-way.
-#       The frontend is copied to a temporary folder with preview-actions.js
-#       added before app.js: it reads ?click= before app.js removes the query
-#       and presses the buttons once they appear. Each screenshot signs in
-#       with its own one-time launch code, as the launcher does.
+#       --live-vm mode (inside tests/integration/vm-libvirt.sh, with libvirtd
+#       running): the real libvirt, a real websockify, one real VM booting
+#       its UEFI firmware; screenshots of the VM list and of its console
+#       open in the page, taken over the DevTools protocol after real
+#       seconds, because the console is a live WebSocket stream.
+#       Animations are off (reduced motion). The frontend is copied to a
+#       temporary folder with preview-actions.js added before app.js: it
+#       reads ?click= before app.js removes the query and presses the buttons
+#       once they appear. Each screenshot signs in with its own one-time
+#       launch code, as the launcher does.
 # Why:  the design system is checked by looking at it (spec "UI design
 #       system"); used by developers and CI, never installed.
 #
 # Usage: python3 control-center/tests/ui_preview.py OUT_DIR [PAGE ...]
-#        Needs chromium, python3-uvicorn, fonts-inter, fonts-jetbrains-mono.
+#        python3 control-center/tests/ui_preview.py --live-vm OUT_DIR
+#        Needs chromium, python3-uvicorn, python3-websockets, fonts-inter,
+#        fonts-jetbrains-mono; --live-vm also libvirtd, websockify, novnc.
 # =============================================================================
 
+import asyncio
+import base64
 import json
 import pathlib
 import shutil
@@ -39,12 +53,13 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 
 import uvicorn  # noqa: E402
 
-from conftest import CC, FIXTURE_CATALOG, FakeDocker, FakePrivd, container  # noqa: E402
-from nimbus_control import compose  # noqa: E402
+from conftest import CC, FIXTURE_CATALOG, FakeDocker, FakeLibvirt, FakePrivd, container  # noqa: E402
+from nimbus_control import compose, vm_xml  # noqa: E402
 from nimbus_control.app import create_app  # noqa: E402
 from nimbus_control.catalog import Catalog  # noqa: E402
 from nimbus_control.config import Settings  # noqa: E402
 
+GIB = 1024 ** 3
 HISTORY = {"entries": [
     {"start": "2026-11-17  06:25:12", "end": "2026-11-17  06:26:40", "command": "apt-get -y -q full-upgrade",
      "requested_by": "", "error": None, "changes": {"upgrade": [{"name": "openssl", "versions": ["3.5.1-1"], "automatic": False}] * 4}},
@@ -57,24 +72,33 @@ SCENES = {
     "apps-advanced": ("apps", ["Catalog", "Advanced…@2"]),
     "apps-compose": ("apps", ["Catalog", "Advanced…@2", "Compose file"]),
     "apps-template": ("apps", ["Template update"]),
+    "vms-isos": ("vms", ["ISO library"]),
+    "vms-create": ("vms", ["Create VM"]),
+    "vms-create-windows": ("vms", ["Create VM", "Windows*"]),
+    "vms-options": ("vms", ["Options: CD drive, start with the computer@2"]),
+    "vms-delete": ("vms", ["Delete@0"]),
 }
 
 ACTIONS_JS = """// preview-actions.js: presses buttons for ui_preview.py screenshots (never installed).
 const wanted = (new URLSearchParams(location.search).get("click") || "").split("|").filter(Boolean);
 async function press(spec) {
   const [text, nth] = spec.split("@");
+  const prefix = text.endsWith("*") ? text.slice(0, -1) : null;
+  const label = (b) => b.textContent.trim() || b.getAttribute("aria-label") || "";
   for (let i = 0; i < 100; i += 1) {
-    const matches = [...document.querySelectorAll("button")].filter((b) => b.textContent.trim() === text);
+    const matches = [...document.querySelectorAll("button")]
+      .filter((b) => (prefix !== null ? label(b).startsWith(prefix) : label(b) === text));
     if (matches[Number(nth || 0)]) { matches[Number(nth || 0)].click(); return; }
     await new Promise((r) => setTimeout(r, 50));
   }
 }
-(async () => { for (const spec of wanted) { await press(spec); await new Promise((r) => setTimeout(r, 300)); } })();
+(async () => { for (const spec of wanted) { await press(spec); await new Promise((r) => setTimeout(r, 400)); } })();
 """
 
 
+# --- made-up data ----------------------------------------------------------------------------
 def build_state(tmp, catalog_dir):
-    """Four installed demo apps, their Compose files, and one share."""
+    """Four installed demo apps, their Compose files, and two shares."""
     state = tmp / "state"
     stacks = state / "stacks"
     stacks.mkdir(parents=True)
@@ -121,13 +145,52 @@ def build_state(tmp, catalog_dir):
     return state, docker
 
 
-def main(argv):
-    out = pathlib.Path(argv[1])
-    pages = argv[2:] or ["updates", "apps"]
-    out.mkdir(parents=True, exist_ok=True)
-    tmp = pathlib.Path(tempfile.mkdtemp())
-    (tmp / "os-release").write_text('NAME="NimbusOS"\nVERSION="0.1.0 (stable)"\nVERSION_ID="0.1.0"\n'
-                                    "NIMBUSOS_CHANNEL=stable\nNIMBUSOS_DEB_VERSION=\"0.1.0\"\n")
+class PreviewLibvirt(FakeLibvirt):
+    """FakeLibvirt whose running VMs use a steady share of their vCPUs."""
+
+    def __init__(self, load, **kw):
+        super().__init__(**kw)
+        self.load = load
+        self._last = time.monotonic()
+
+    def stats(self):
+        now = time.monotonic()
+        for name, vm in self.vms.items():
+            vcpus = int(vm["xml"].split("<vcpu")[1].split(">")[1].split("<")[0])
+            vm["cpu_time"] += int((now - self._last) * 1e9 * vcpus * self.load.get(name, 0))
+        self._last = now
+        return super().stats()
+
+
+def build_vms(tmp):
+    isos = tmp / "isos"
+    isos.mkdir()
+    for name, size in (("debian-13.2.0-amd64-netinst.iso", 0.75 * GIB), ("Win11_24H2_English_x64.iso", 5.8 * GIB),
+                       ("virtio-win-0.1.266.iso", 0.71 * GIB)):
+        with open(isos / name, "wb") as f:
+            f.truncate(int(size))
+    lv = PreviewLibvirt({"debian-server": 0.23, "home-assistant": 0.06}, threads=16, memory=64 * GIB)
+    vms = [("debian-server", "linux", 4, 8192, "uefi", "debian-13.2.0-amd64-netinst.iso", None, 64, "running", False),
+           ("home-assistant", "linux", 2, 4096, "uefi", None, None, 32, "running", True),
+           ("win11", "windows", 4, 8192, "uefi", "Win11_24H2_English_x64.iso", "virtio-win-0.1.266.iso", 80, "stopped", True),
+           ("backup-test", "linux", 1, 2048, "bios", None, None, 16, "paused", False)]
+    for i, (name, preset, vcpus, mem, fw, iso, drivers, disk, st, auto) in enumerate(vms):
+        volume, _ = lv.create_volume(name, disk * GIB)
+        lv.define(vm_xml.build_domain({
+            "name": name, "uuid": f"6c2f0a1e-0000-4000-8000-00000000000{i}", "preset": preset, "vcpus": vcpus, "memory_mib": mem,
+            "firmware": fw, "pool": "nimbus-images", "volume": volume, "iso": iso and str(isos / iso),
+            "drivers_iso": drivers and str(isos / drivers), "network": {"mode": "nat"}, "vnc_password": "Pr3view0",
+            "created": "2026-11-10T08:00:00+00:00"}))
+        lv.vms[name].update(state=st, autostart=auto)
+    lv.vms["backup-test"]["reason"] = "paused by a disk error (is the disk full?)"
+    foreign = (pathlib.Path(__file__).parent / "test_vm_xml.py").read_text().split('FOREIGN = """')[1].split('"""')[0]
+    lv.vms["legacy-vm"] = {"xml": foreign.replace("old-vm", "legacy-vm"), "state": "stopped", "autostart": False,
+                           "uuid": "11111111-2222-3333-4444-555555555555", "cpu_time": 0}
+    return isos, lv
+
+
+# --- serving and shooting --------------------------------------------------------------------------
+def prepare_www(tmp):
     www = tmp / "www"
     shutil.copytree(CC / "frontend", www)
     (www / "preview-actions.js").write_text(ACTIONS_JS)
@@ -135,10 +198,12 @@ def main(argv):
     (www / "index.html").write_text(index.replace('<script type="module" src="/app.js">',
                                                   '<script type="module" src="/preview-actions.js"></script>\n  '
                                                   '<script type="module" src="/app.js">'))
-    state, docker = build_state(tmp, FIXTURE_CATALOG)
-    settings = Settings(run_dir=str(tmp), www_dir=str(www), os_release=str(tmp / "os-release"), state_dir=str(state),
-                        catalog_dir=str(FIXTURE_CATALOG), logo_path=str(CC.parent / "packages/nimbusos-branding/art/logo.svg"))
-    app = create_app(settings, privd=FakePrivd({"update.history": HISTORY}), docker=docker)
+    (tmp / "os-release").write_text('NAME="NimbusOS"\nVERSION="0.1.0 (stable)"\nVERSION_ID="0.1.0"\n'
+                                    "NIMBUSOS_CHANNEL=stable\nNIMBUSOS_DEB_VERSION=\"0.1.0\"\n")
+    return www
+
+
+def serve(app):
     server = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=7777, log_level="warning", ws="websockets"))
     threading.Thread(target=server.run, daemon=True).start()
     for _ in range(50):
@@ -147,31 +212,130 @@ def main(argv):
             break
         except OSError:
             time.sleep(0.1)
+    return server
 
-    codes = app.app.state.codes
 
-    def shot(name, page=None, clicks=(), width=1400, height=900):
-        path = out / f"{name}.png"
-        query = {"launch": codes.issue()} if page else {}
-        if clicks:
-            query["click"] = "|".join(clicks)
-        url = "http://127.0.0.1:7777/" + (f"?{urllib.parse.urlencode(query)}#{page}" if page else "")
-        subprocess.run(["chromium", "--headless=new", "--no-sandbox", "--disable-gpu", "--hide-scrollbars", "--force-prefers-reduced-motion",
-                        f"--window-size={width},{height}", "--virtual-time-budget=8000", f"--screenshot={path}", url],
-                       check=True, capture_output=True, timeout=120)
+def page_url(codes, page=None, clicks=()):
+    query = {"launch": codes.issue()} if page else {}
+    if clicks:
+        query["click"] = "|".join(clicks)
+    return "http://127.0.0.1:7777/" + (f"?{urllib.parse.urlencode(query)}#{page}" if page else "")
+
+
+CHROMIUM = ["chromium", "--headless=new", "--no-sandbox", "--disable-gpu", "--hide-scrollbars", "--force-prefers-reduced-motion"]
+
+
+def shot(path, url, width=1400, height=900):
+    subprocess.run([*CHROMIUM, f"--window-size={width},{height}", "--virtual-time-budget=8000", f"--screenshot={path}", url],
+                   check=True, capture_output=True, timeout=120)
+    print(f"wrote {path}")
+
+
+def live_shot(path, url, width=1400, height=900, wait=10.0):
+    """A screenshot after WAIT real seconds, over the DevTools protocol."""
+    import websockets.sync.client as wsc
+    proc = subprocess.Popen([*CHROMIUM, f"--window-size={width},{height}", "--remote-debugging-port=9223", "about:blank"],
+                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    try:
+        targets = []
+        for _ in range(100):
+            try:
+                targets = json.load(urllib.request.urlopen("http://127.0.0.1:9223/json", timeout=1))
+                if any(t["type"] == "page" for t in targets):
+                    break
+            except OSError:
+                pass
+            time.sleep(0.1)
+        target = next(t for t in targets if t["type"] == "page")
+        with wsc.connect(target["webSocketDebuggerUrl"], max_size=None) as ws:
+            counter = [0]
+
+            def call(method, **params):
+                counter[0] += 1
+                ws.send(json.dumps({"id": counter[0], "method": method, "params": params}))
+                while True:
+                    message = json.loads(ws.recv(timeout=60))
+                    if message.get("id") == counter[0]:
+                        return message.get("result", {})
+            call("Page.enable")
+            call("Page.navigate", url=url)
+            time.sleep(wait)
+            data = call("Page.captureScreenshot", format="png")["data"]
+        path.write_bytes(base64.b64decode(data))
         print(f"wrote {path}")
+    finally:
+        proc.terminate()
+        proc.wait()
 
+
+# --- the two modes -----------------------------------------------------------------------------------
+def preview(out, pages):
+    tmp = pathlib.Path(tempfile.mkdtemp())
+    www = prepare_www(tmp)
+    state, docker = build_state(tmp, FIXTURE_CATALOG)
+    isos, lv = build_vms(tmp)
+    (tmp / "tokens").mkdir()
+    settings = Settings(run_dir=str(tmp), www_dir=str(www), os_release=str(tmp / "os-release"), state_dir=str(state),
+                        catalog_dir=str(FIXTURE_CATALOG), logo_path=str(CC.parent / "packages/nimbusos-branding/art/logo.svg"),
+                        isos_dir=str(isos), vnc_tokens_dir=str(tmp / "tokens"))
+    app = create_app(settings, privd=FakePrivd({"update.history": HISTORY}), docker=docker, libvirt=lv, bridges=lambda: ["br0"])
+    server = serve(app)
+    codes = app.app.state.codes
     for page in pages:
-        shot(f"ui-{page}", page)
-        shot(f"ui-{page}-full", page, height=1800)
-        shot(f"ui-{page}-800", page, width=800)
+        shot(out / f"ui-{page}.png", page_url(codes, page))
+        shot(out / f"ui-{page}-full.png", page_url(codes, page), height=1800)
+        shot(out / f"ui-{page}-800.png", page_url(codes, page), width=800)
     for name, (page, clicks) in SCENES.items():
         if page in pages:
-            shot(f"ui-{name}", page, clicks)
+            shot(out / f"ui-{name}.png", page_url(codes, page, clicks), height=1000 if "create" in name else 900)
     if "apps" in pages:
-        shot("ui-apps-advanced-800", "apps", SCENES["apps-advanced"][1], width=800, height=1000)
-    shot("ui-signed-out", width=900, height=500)
+        shot(out / "ui-apps-advanced-800.png", page_url(codes, "apps", SCENES["apps-advanced"][1]), width=800, height=1000)
+    if "vms" in pages:
+        shot(out / "ui-vms-create-800.png", page_url(codes, "vms", SCENES["vms-create"][1]), width=800, height=1000)
+    shot(out / "ui-signed-out.png", "http://127.0.0.1:7777/", width=900, height=500)
     server.should_exit = True
+
+
+def live_vm(out):
+    from nimbus_control.libvirt_api import LibvirtApi
+    tmp = pathlib.Path(tempfile.mkdtemp())
+    www = prepare_www(tmp)
+    tokens = tmp / "tokens"
+    tokens.mkdir()
+    (tmp / "state").mkdir()
+    ws = subprocess.Popen(["websockify", "--token-plugin=TokenFile", f"--token-source={tokens}", "127.0.0.1:6080"],
+                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    settings = Settings(run_dir=str(tmp), www_dir=str(www), os_release=str(tmp / "os-release"), state_dir=str(tmp / "state"),
+                        catalog_dir=str(FIXTURE_CATALOG), logo_path=str(CC.parent / "packages/nimbusos-branding/art/logo.svg"),
+                        vnc_tokens_dir=str(tokens))
+    app = create_app(settings, privd=FakePrivd(), docker=FakeDocker(), libvirt=LibvirtApi())
+    svc = app.app.state.vms
+    with open(pathlib.Path(settings.isos_dir) / "blank.iso", "wb") as f:
+        f.write(b"\0" * 1024 * 1024)
+    result = asyncio.run(svc.create({"name": "uefi-demo", "preset": "linux", "vcpus": 1, "memory_mib": 512, "disk_gib": 1,
+                                     "iso": "blank.iso", "network": {"mode": "nat"}}))
+    print(result["message"])
+    server = serve(app)
+    try:
+        time.sleep(4)                                 # let the firmware draw something
+        codes = app.app.state.codes
+        live_shot(out / "ui-vms-live.png", page_url(codes, "vms"), wait=8)
+        live_shot(out / "ui-vms-console-live.png", page_url(codes, "vms", ["Console"]), wait=14)
+    finally:
+        server.should_exit = True
+        asyncio.run(svc.delete("uefi-demo", True))
+        ws.terminate()
+
+
+def main(argv):
+    if len(argv) > 2 and argv[1] == "--live-vm":
+        out = pathlib.Path(argv[2])
+        out.mkdir(parents=True, exist_ok=True)
+        live_vm(out)
+        return 0
+    out = pathlib.Path(argv[1])
+    out.mkdir(parents=True, exist_ok=True)
+    preview(out, argv[2:] or ["updates", "apps", "vms"])
     return 0
 
 

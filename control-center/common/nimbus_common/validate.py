@@ -9,7 +9,7 @@
 #         root, so ".." and symlinks can't escape), one_of, int_range,
 #         job_id; for apps: app_id, relative_path (inside an app's
 #         folder), env_name, network_name (also Docker volume names),
-#         container_path, RESTART_POLICIES
+#         container_path, RESTART_POLICIES; for VMs: iso_name, bridge_name
 # Why:  docs/PLAN.md §4.3 (input validation): names become directory names,
 #       Samba section names, compose project names and libvirt domain names;
 #       ports and paths reach docker and Samba. privd runs these again on
@@ -131,6 +131,17 @@ def container_path(value, field="container"):
 
 
 RESTART_POLICIES = ("no", "always", "unless-stopped", "on-failure")
+
+
+def iso_name(value, field="name"):
+    """ISO library file names: no folders, no leading dot, .iso or .img."""
+    return _match(field, value, r"[A-Za-z0-9][A-Za-z0-9 ._+()-]{0,190}\.(?i:iso|img)",
+                  "ISO file names may use letters, digits, spaces and . - + _ ( ), and end in .iso or .img.")
+
+
+def bridge_name(value, field="bridge"):
+    """Linux network interface names (15 characters at most)."""
+    return _match(field, value, r"[A-Za-z0-9][A-Za-z0-9_.-]{0,14}", "Not a network bridge name.")
 
 
 def path_under(value, roots, field="path", must_exist=False):

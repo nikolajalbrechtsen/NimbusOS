@@ -1,0 +1,24 @@
+<!doctype html>
+<!-- =============================================================================
+     console.html: a VM's console in its own window
+     =============================================================================
+     What: the "Pop out" window of a VM console: the VM's name, the connection
+           status, Ctrl+Alt+Del, full screen, and the screen itself
+           (console.js, lib/vnc.js). Opened from the Virtual Machines page as
+           /console.html#<vm name>; it uses that window's session.
+     Why:  spec Tab B (embedded noVNC console); docs/PLAN.md NOTE-67.
+     ========================================================================== -->
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>VM console · Nimbus Control Center</title>
+  <link rel="icon" href="/logo.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/style.css">
+  <script type="module" src="/console.js"></script>
+</head>
+<body class="console-page">
+  <noscript>The console needs JavaScript.</noscript>
+</body>
+</html>

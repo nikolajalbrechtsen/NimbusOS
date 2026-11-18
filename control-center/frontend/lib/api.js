@@ -1,7 +1,8 @@
 // =============================================================================
 // lib/api.js: talking to the Control Center backend
 // =============================================================================
-// What: get/post/put/del send JSON with "Authorization: Bearer <token>" and
+// What: get/post/put/del send JSON (putBlob a binary upload chunk) with
+//       "Authorization: Bearer <token>" and
 //       turn any failure into ApiError(status, message, field), where message
 //       is the backend's plain-language explanation. socket(path) opens a
 //       WebSocket that authenticates with the subprotocols "nimbus.v1" and
@@ -28,7 +29,10 @@ export function onSignedOut(handler) { signedOutHandler = handler; }
 async function request(method, path, body) {
   const headers = { Authorization: `Bearer ${token}` };
   const init = { method, headers, cache: "no-store" };
-  if (body !== undefined) {
+  if (body instanceof Blob) {
+    headers["Content-Type"] = "application/octet-stream";
+    init.body = body;
+  } else if (body !== undefined) {
     headers["Content-Type"] = "application/json";
     init.body = JSON.stringify(body);
   }
@@ -55,6 +59,7 @@ export const get = (path) => request("GET", path);
 export const post = (path, body = {}) => request("POST", path, body);
 export const put = (path, body = {}) => request("PUT", path, body);
 export const del = (path, body) => request("DELETE", path, body);
+export const putBlob = (path, blob) => request("PUT", path, blob);
 
 export async function exchangeLaunchCode(code) {
   let response;

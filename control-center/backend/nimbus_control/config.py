@@ -23,6 +23,13 @@ class Settings:
     os_release: str = "/etc/os-release"
     logo_path: str = "/usr/share/icons/hicolor/scalable/apps/nimbusos.svg"
     catalog_dir: str = "/usr/share/nimbus-control/catalog"
+    libvirt_uri: str = "qemu:///system"
+    isos_dir: str = "/var/lib/nimbus-vms/isos"
+    images_dir: str = "/var/lib/nimbus-vms/images"
+    vnc_tokens_dir: str = "/run/nimbus-control/vnc-tokens"
+    novnc_dir: str = "/usr/share/novnc"
+    websockify_port: int = 6080
+    iso_max_bytes: int = 32 * 1024 ** 3
 
     @classmethod
     def from_env(cls, env=None):

@@ -6,8 +6,9 @@
 #           client, the fonts found in Debian's packages, the services, and
 #           "counters" (name -> async function) for the sidebar counts;
 #         - routes: session, system, updates, apps and the catalog, jobs,
-#           fonts, /logo.svg (the NimbusOS logo from nimbusos-branding), then
-#           the frontend's static files;
+#           VMs and the ISO library, fonts, /logo.svg (the NimbusOS logo from
+#           nimbusos-branding), the packaged noVNC at /novnc/ (VM consoles),
+#           then the frontend's static files;
 #         - no OpenAPI or docs pages (nothing to browse on a desktop app);
 #         - everything wrapped in SecurityMiddleware (auth.py).
 #       Returns the wrapped ASGI app, which nimbus-control-server runs with
@@ -16,6 +17,7 @@
 #       static frontend.
 # =============================================================================
 
+import asyncio
 import os
 
 import psutil
@@ -23,18 +25,20 @@ from fastapi import FastAPI
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import apps_service, errors, fonts, jobs, system_service, updates_service
+from . import apps_service, errors, fonts, jobs, system_service, updates_service, vm_service
 from .auth import LaunchCodes, SecurityMiddleware, TokenStore
 from .auth import router as session_router
 from .catalog import Catalog
 from .config import Settings
 from .docker_api import DockerApi
 from .errors import ApiError
+from .iso_library import IsoLibrary
+from .libvirt_api import LibvirtApi
 from .privd_client import PrivdClient
 from .state import StateStore
 
 
-def create_app(settings=None, privd=None, font_lister=fonts.package_files, docker=None):
+def create_app(settings=None, privd=None, font_lister=fonts.package_files, docker=None, libvirt=None, bridges=None):
     settings = settings or Settings.from_env()
     app = FastAPI(title="Nimbus Control Center", docs_url=None, redoc_url=None, openapi_url=None)
     app.state.settings = settings
@@ -48,11 +52,23 @@ def create_app(settings=None, privd=None, font_lister=fonts.package_files, docke
     app.state.updates = updates_service.UpdatesService(app.state.privd)
     app.state.apps = apps_service.AppsService(app.state.store, app.state.catalog, docker or DockerApi(),
                                               app.state.privd, app.state.jobs)
+    app.state.isos = IsoLibrary(settings.isos_dir, settings.iso_max_bytes)
+    app.state.vms = vm_service.VmService(libvirt or LibvirtApi(settings.libvirt_uri, settings.images_dir), app.state.isos,
+                                         settings.vnc_tokens_dir, **({"bridges": bridges} if bridges else {}))
+    # A fresh start: no console stays open and no upload can be resumed.
+    app.state.vms.clear_tokens()
+    try:
+        app.state.isos.cleanup(everything=True)
+    except OSError:
+        pass
 
     async def app_count():
         return len(app.state.store.stacks())
 
-    app.state.counters = {"updates": app.state.updates.pending_count, "apps": app_count}
+    async def vm_count():
+        return await asyncio.to_thread(app.state.vms.libvirt.count)
+
+    app.state.counters = {"updates": app.state.updates.pending_count, "apps": app_count, "vms": vm_count}
     psutil.cpu_percent(interval=None)        # the first reading is always 0.0
 
     errors.install(app)
@@ -61,6 +77,7 @@ def create_app(settings=None, privd=None, font_lister=fonts.package_files, docke
     app.include_router(updates_service.router)
     app.include_router(apps_service.router)
     app.include_router(jobs.router)
+    app.include_router(vm_service.router)
     app.include_router(fonts.router)
 
     @app.get("/logo.svg", include_in_schema=False)
@@ -69,6 +86,8 @@ def create_app(settings=None, privd=None, font_lister=fonts.package_files, docke
             raise ApiError(404, "The NimbusOS logo (nimbusos-branding) is not installed.")
         return FileResponse(settings.logo_path, media_type="image/svg+xml")
 
+    if os.path.isdir(settings.novnc_dir):           # the packaged noVNC, for the VM consoles
+        app.mount("/novnc", StaticFiles(directory=settings.novnc_dir), name="novnc")
     if os.path.isdir(settings.www_dir):
         app.mount("/", StaticFiles(directory=settings.www_dir, html=True), name="www")
-    return SecurityMiddleware(app, app.state.tokens, settings.port)
+    return SecurityMiddleware(app, app.state.tokens, settings.port, ws_ports=(settings.websockify_port,))

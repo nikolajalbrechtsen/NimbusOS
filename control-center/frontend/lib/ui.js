@@ -237,9 +237,10 @@ export function confirmDialog({ title, message, confirmLabel = "Continue", dange
 }
 
 // --- log drawer ------------------------------------------------------------------------------
-// logDrawer(title) -> {log(line), status(kind, text), progress(fraction|null), done(ok, text), close()}
+// logDrawer(title, {onClose}) -> {log(line), status(kind, text), progress(fraction|null), done(ok, text), close()}
+// onClose runs when the drawer goes away (closed, or replaced by another one).
 let openDrawer = null;
-export function logDrawer(title) {
+export function logDrawer(title, { onClose = null } = {}) {
   if (openDrawer) openDrawer.close();
   const statusPill = pill("info", "Running");
   const bar = h("div", { class: "progress indeterminate", role: "progressbar", "aria-label": title }, h("i"));
@@ -271,7 +272,12 @@ export function logDrawer(title) {
       bar.classList.add(ok ? "good" : "bad");
       api.status(ok ? "good" : "bad", text || (ok ? "Done" : "Failed"));
     },
-    close() { el.remove(); if (openDrawer === api) openDrawer = null; },
+    close() {
+      if (!el.isConnected) return;
+      el.remove();
+      if (openDrawer === api) openDrawer = null;
+      if (onClose) onClose();
+    },
   };
   closeBtn.addEventListener("click", () => api.close());
   openDrawer = api;

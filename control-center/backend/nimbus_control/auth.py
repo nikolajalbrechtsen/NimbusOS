@@ -13,7 +13,8 @@
 #           /api/* needs "Authorization: Bearer <token>", except the code
 #           exchange; WebSockets offer the subprotocols "nimbus.v1" and
 #           "nimbus.token.<token>"; static files are public (no secrets);
-#           every HTTP response gets a strict CSP and related headers.
+#           every HTTP response gets a strict CSP and related headers (its
+#           connect-src also allows websockify's port, for VM consoles).
 #       - the session routes: launch-code (needs the token) and exchange.
 # Why:  spec section 3 (Security) and docs/PLAN.md §4.3. Docker and libvirt
 #       access are effectively root, so every call is authenticated.
@@ -35,7 +36,7 @@ TOKEN_RE = re.compile(r"[A-Za-z0-9_-]{43}")
 WS_PROTOCOL = "nimbus.v1"
 WS_TOKEN_PREFIX = "nimbus.token."
 PUBLIC_EXACT = {"/", "/index.html", "/style.css", "/app.js", "/logo.svg", "/api/session/exchange"}
-PUBLIC_PREFIXES = ("/lib/", "/views/", "/fonts/", "/catalog-icons/")
+PUBLIC_PREFIXES = ("/lib/", "/views/", "/fonts/", "/catalog-icons/", "/novnc/")
 
 
 class TokenStore:
@@ -89,8 +90,9 @@ class LaunchCodes:
         return expiry is not None and expiry > self._clock()
 
 
-def security_headers(port):
-    origins = f"ws://127.0.0.1:{port} ws://localhost:{port}"
+def security_headers(port, ws_ports=()):
+    # WebSockets: the backend's own, and websockify's for the VM consoles.
+    origins = " ".join(f"ws://{host}:{p}" for p in (port, *ws_ports) for host in ("127.0.0.1", "localhost"))
     csp = ("default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self'; font-src 'self'; "
            f"connect-src 'self' {origins}; frame-src 'self'; frame-ancestors 'self'; base-uri 'none'; "
            "form-action 'self'; object-src 'none'")
@@ -104,12 +106,12 @@ def security_headers(port):
 
 
 class SecurityMiddleware:
-    def __init__(self, app, tokens, port):
+    def __init__(self, app, tokens, port, ws_ports=()):
         self.app = app
         self.tokens = tokens
         self.hosts = {f"127.0.0.1:{port}", f"localhost:{port}"}
         self.origins = {f"http://127.0.0.1:{port}", f"http://localhost:{port}"}
-        self.headers = security_headers(port)
+        self.headers = security_headers(port, ws_ports)
 
     async def __call__(self, scope, receive, send):
         kind = scope["type"]
