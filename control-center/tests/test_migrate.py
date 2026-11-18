@@ -154,8 +154,8 @@ def test_failed_step_restores_state_and_reports(state, steps):
     # Step 0002 had already run and been recorded; everything is rolled back.
     assert top_files(state) == before
     assert (state / "schema_version").read_text() == "1\n"
-    msg = [line for line in r.stderr.splitlines() if "failed" in line]
-    assert len(msg) == 1
+    msg = [line for line in r.stderr.splitlines() if "state migration" in line]
+    assert len(msg) == 1, r.stderr
     assert "state migration 0003 (add the theme setting) failed: RuntimeError: disk on fire" in msg[0]
     assert "restored from" in msg[0] and "will not start" in msg[0]
     # A second run after fixing the step succeeds from schema 1.
@@ -167,12 +167,13 @@ def test_failed_step_restores_state_and_reports(state, steps):
 
 def test_broken_step_file_is_reported_like_a_failure(state, steps):
     write_schema1_state(state)
-    (steps / "0002_share_ids.py").write_text("this is not python\n")
+    (steps / "0002_share_ids.py").write_text("def migrate(ctx)\n    pass\n")
     before = top_files(state)
     r = run(state, steps)
     assert r.returncode == 1
     assert top_files(state) == before
-    assert "state migration 0002" in r.stderr and "SyntaxError" in r.stderr
+    msg = [line for line in r.stderr.splitlines() if "state migration 0002" in line]
+    assert len(msg) == 1 and "(share ids) failed: SyntaxError: expected ':'" in msg[0], r.stderr
 
 
 def test_downgrade_is_refused_and_state_untouched(state):

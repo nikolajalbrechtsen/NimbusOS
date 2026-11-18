@@ -66,6 +66,7 @@ deb="$(find "$DEBS" -maxdepth 1 -name 'nimbus-control_*.deb' -print -quit)"
 WORK="$(mktemp -d)"
 LOG=/tmp/nimbus-control-calls.log
 STATE=/var/lib/nimbus-control
+[[ ! -e "$STATE" ]] || { echo "maintscripts.test: $STATE already exists; run this test in a fresh container" >&2; exit 2; }
 SVC_RUN=(setpriv --reuid=nimbus-control --regid=nimbus-control --init-groups --)
 
 # Dependencies too large for a test, or only in Docker's repository; they
@@ -81,13 +82,19 @@ stand_in() {   # stand_in NAME: build and install an empty package NAME
 	dpkg -i "$WORK/$1.deb" >/dev/null
 }
 wrap() {   # wrap NAME [REAL]: log calls from nimbus-control's scripts, then run REAL
+	# Calls made by deb-systemd-invoke/-helper themselves are not logged:
+	# they are the sanctioned path.
+	local run="exit 0"
+	if [[ -n "${2:-}" ]]; then run="exec $2 \"\$@\""; fi
 	cat >"/usr/local/bin/$1" <<EOF
 #!/bin/sh
 if [ "\${DPKG_MAINTSCRIPT_PACKAGE:-}" = nimbus-control ]; then
-	echo "\${DPKG_MAINTSCRIPT_NAME:-?} $1 \$*" >>$LOG
+	case "\$(tr '\\0' ' ' </proc/\$PPID/cmdline 2>/dev/null)" in
+		*deb-systemd-*) ;;
+		*) echo "\${DPKG_MAINTSCRIPT_NAME:-?} $1 \$*" >>$LOG ;;
+	esac
 fi
-${2:+exec $2 \"\$@\"}
-exit 0
+$run
 EOF
 	chmod 0755 "/usr/local/bin/$1"
 }
@@ -132,13 +139,21 @@ apt-get update -q >/dev/null
 # --- 1. static ---------------------------------------------------------------------
 echo "Maintainer scripts (static)"
 scripts="$(maintscripts_text "$deb")"
-check "no docker, virsh or smbcontrol command" sh -c '! printf "%s" "$1" | grep -Eqw "docker|virsh|smbcontrol"' _ "$scripts"
-check "no systemctl start/restart/reload, invoke-rc.d or service" \
-	sh -c '! printf "%s" "$1" | grep -Eq "systemctl[^|;&]*(start|restart|reload|try-restart)|invoke-rc\.d|(^|[[:space:]])service[[:space:]]"' _ "$scripts"
+# A command word: at the start of a line, after ; & | ( or $(, or after
+# then/do/else/exec/!, optionally with a directory in front.
+cmd='(^|[;&|(]|\$\(|[[:space:]](then|do|else|exec|!))[[:space:]]*([^[:space:]]*/)?'
+check "no docker, virsh or smbcontrol command" \
+	sh -c '! printf "%s\n" "$1" | grep -Eq "$2(docker|virsh|smbcontrol)([[:space:]]|\$)"' _ "$scripts" "$cmd"
+check "no systemctl start/stop/restart/reload, invoke-rc.d or service command" \
+	sh -c '! printf "%s\n" "$1" | grep -Eq "$2(systemctl([[:space:]]+-[^[:space:]]+)*[[:space:]]+(start|stop|restart|reload|try-restart|reload-or-restart)([[:space:]]|\$)|invoke-rc\.d|service[[:space:]])"' _ "$scripts" "$cmd"
+check "the static check catches a direct call (self-test)" \
+	sh -c 'printf "%s\n" "	if true; then /usr/bin/virsh net-start default; fi" "x=\$(systemctl --quiet restart foo)" \
+		| grep -Ec "$1(virsh|systemctl([[:space:]]+-[^[:space:]]+)*[[:space:]]+restart)" | grep -qx 2' _ "$cmd"
 
 # --- install the dependencies first, so only nimbus-control's calls are logged ----
 for p in $STAND_INS; do stand_in "$p"; done
-deps="$(dpkg-deb -f "$deb" Depends | tr ',' '\n' | sed -E 's/\(.*\)//; s/:any//; s/^[[:space:]]+|[[:space:]]+$//g' | grep -v '^$')"
+# One name per dependency: the first alternative, without version or ":any".
+deps="$(dpkg-deb -f "$deb" Depends | tr ',' '\n' | sed -E 's/\|.*//; s/\(.*\)//; s/:any//; s/^[[:space:]]+|[[:space:]]+$//g' | grep -v '^$')"
 # shellcheck disable=SC2086
 apt-get install -y -q --no-install-recommends $deps python3-pytest >/tmp/deps.log 2>&1 \
 	|| { tail -n 30 /tmp/deps.log; exit 1; }
@@ -178,8 +193,13 @@ check "smb.conf has the include exactly once" test "$(grep -cxF 'include = /etc/
 check "testparm accepts the configuration" testparm -s
 check "Samba: guest account = nimbus-guest" test "$(smb_param 'guest account')" = nimbus-guest
 check "Samba: multicast dns register = No" test "$(smb_param 'multicast dns register')" = No
-check "Samba: disable netbios = Yes, server min protocol = SMB2_10" \
-	sh -c '[ "$(testparm -s --parameter-name="disable netbios" 2>/dev/null)" = Yes ] && [ "$(testparm -s --parameter-name="server min protocol" 2>/dev/null)" = SMB2_10 ]'
+check "Samba: disable netbios = Yes" test "$(smb_param 'disable netbios')" = Yes
+# testparm prints a protocol under its canonical name ("SMB2" for SMB2_10), so
+# compare with what it prints for an explicit SMB2_10.
+printf '[global]\n   server min protocol = SMB2_10\n' >"$WORK/smb2_10.conf"
+smb2_10="$(testparm -s --parameter-name='server min protocol' "$WORK/smb2_10.conf" 2>/dev/null)"
+check "Samba: server min protocol is SMB2_10 (testparm: '$(smb_param 'server min protocol')')" \
+	test "$(smb_param 'server min protocol')" = "$smb2_10"
 check "adduser.conf: EXTRA_GROUPS and ADD_EXTRA_GROUPS set" \
 	sh -c "grep -qx 'EXTRA_GROUPS=\"$NIMBUS_USER_EXTRA_GROUPS\"' /etc/adduser.conf && grep -qx 'ADD_EXTRA_GROUPS=1' /etc/adduser.conf"
 check "nmbd disabled, smbd still enabled" sh -c '! systemctl is-enabled nmbd.service | grep -qx enabled && systemctl is-enabled smbd.service | grep -qx enabled'
@@ -314,10 +334,11 @@ echo "--- purge output ---"
 sed -n '/nimbus-control: removed/,$p' /tmp/purge.log
 echo "--------------------"
 
-# Once more from scratch: install, purge, and adduser.conf is byte-identical.
+# Once more from Debian's own adduser.conf: install, purge, byte-identical.
+cp -p "$WORK/adduser.conf.before" /etc/adduser.conf
 dpkg -i "$deb" >/dev/null 2>&1 && dpkg --purge nimbus-control >/dev/null 2>&1
-sed -i -E "s/^EXTRA_GROUPS=.*//" /etc/adduser.conf && sed -i '${/^$/d}' /etc/adduser.conf
-check "fresh install + purge leaves adduser.conf byte-identical" cmp -s /etc/adduser.conf "$WORK/adduser.conf.before"
+check "fresh install + purge: adduser.conf byte-identical" cmp -s /etc/adduser.conf "$WORK/adduser.conf.before"
+check "fresh install + purge: smb.conf byte-identical" cmp -s /etc/samba/smb.conf "$WORK/smb.conf.before"
 
 echo
 printf 'nimbus-control maintscripts.test: %d passed, %d failed\n' "$passed" "$failed"

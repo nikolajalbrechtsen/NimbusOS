@@ -81,14 +81,14 @@ NimbusOS/
 │   │                                 flathub/, systemd/*, tests/ (pytest, apt pinning proof, install test)
 │   ├── nimbusos-branding/            art/*.svg, grub/, plymouth/, sddm/, calamares/, plasma/, color-schemes/, xdg/,
 │   │                                 Makefile (renders PNGs and GRUB fonts), tests/install.test.sh
-│   ├── nimbus-control/               debian/ only; payload staged from control-center/ at build time
-│   ├── nimbus-catalog/               debian/ only; payload staged from catalog/ at build time
+│   ├── nimbus-control/               debian/ and tests/; payload staged from control-center/ at build time
+│   ├── nimbus-catalog/               debian/ and tests/; payload staged from catalog/ at build time
 │   └── nimbusos-desktop/             metapackage; Depends generated from build/config/package-lists/
 │
 ├── control-center/
 │   ├── backend/nimbus_control/       FastAPI: app.py, auth.py, metrics_service.py, docker_service.py,
 │   │                                 vm_service.py, storage_service.py, shares_service.py,
-│   │                                 updates_service.py, privd_client.py, state.py, migrations/
+│   │                                 updates_service.py, privd_client.py, state.py
 │   ├── common/nimbus_common/         shared by backend and privd: validators, smb.conf renderer, schemas
 │   ├── privd/                        nimbus-privd.py + nimbus_privd/ (disks, pool, samba, smbusers, updates, audit)
 │   ├── frontend/                     index.html, console.html, style.css, app.js,
@@ -96,6 +96,7 @@ NimbusOS/
 │   │                                 views/{dashboard,apps,vms,storage,updates,settings}.js
 │   ├── bin/                          nimbus-control-server, nimbus-control-open (launcher), nimbus-migrate,
 │   │                                 nimbus-snapraid-run, nimbus-recycle-clean, nimbus-netfix, nimbus-grant-access
+│   ├── migrations/                   NNNN_name.py: the state migration steps nimbus-migrate runs (NOTE-59)
 │   ├── systemd/                      nimbus-control.service, nimbus-privd.{socket,service},
 │   │                                 nimbus-websockify.service, nimbus-snapraid-sync.{service,timer},
 │   │                                 nimbus-recycle-clean.{service,timer}, nimbus-netfix.service
@@ -188,8 +189,8 @@ git tag -a v0.2.0  ──►  release.yml   (concurrency group "nimbusos-publish
 | `nimbusos-docker-keyring` | `/usr/share/keyrings/docker-archive-keyring.gpg`: Docker's key, the `Signed-By` of the image's `docker.list` (NOTE-05) | none | none |
 | `nimbusos-release` | `/usr/lib/os-release` (diverted, NOTE-36); `/etc/apt/sources.list.d/nimbusos.sources` (deb822, `Signed-By`); `/etc/apt/preferences.d/nimbusos.pref` + `nimbusos-docker.pref`; `/etc/apt/apt.conf.d/21nimbusos-periodic` + `52nimbusos-unattended-upgrades`; `/usr/bin/nimbus-update` + man page; `nimbus-update-check.timer`, `nimbus-update-auto.timer`, `nimbus-flathub-setup.service` | Depends: `nimbusos-archive-keyring (>= ver)`, `python3`, `python3-apt`, `unattended-upgrades`, `gpgv` | preinst: `dpkg-divert --rename` of base-files' os-release. postinst: create `/etc/nimbusos/update.conf` if missing; recreate the beta source if Beta is selected. postrm: remove the diversion; on purge, remove the generated files |
 | `nimbusos-branding` | GRUB theme + `/etc/default/grub.d/10-nimbusos.cfg`, Plymouth theme, SDDM theme "nimbus" + `/etc/sddm.conf.d/10-nimbusos.conf`, Calamares branding, Nimbus Sky wallpaper, Plasma global theme `org.nimbusos.desktop` (with `layout.js` and splash), `NimbusDark.colors`, `/etc/xdg` defaults, `/etc/xdg/nimbusos/kcm-about-distrorc` (NOTE-55), the hicolor `nimbusos` icon, the desktop-base theme `/usr/share/desktop-base/nimbusos-theme/` | Depends: `desktop-base`, `papirus-icon-theme`, `breeze-cursor-theme`, `fonts-inter`, `fonts-jetbrains-mono`, `plymouth`, `plymouth-label`, `qt6-svg-plugins` | postinst: register `nimbusos-theme` as desktop-base's `desktop-theme` alternative at priority 80, which every desktop-base background, login and GRUB alternative follows (NOTE-56); select the Plymouth theme unless the administrator chose one; `update-grub` if GRUB is installed; new systems start SDDM on Plasma (Wayland). Initramfs rebuilt by trigger. prerm: remove the alternative. postrm: hand Plymouth back; `update-grub` |
-| `nimbus-control` | backend, frontend, `nimbus-privd`, units, Samba drop-in, polkit action, launcher | Depends: the Python stack (`python3-fastapi`, `python3-uvicorn`, `python3-websockets`, `python3-docker`, `python3-libvirt`, `python3-psutil`, `python3-jinja2`, `python3-yaml`, `python3-jsonschema`, `python3-systemd`), `fonts-inter`, `fonts-jetbrains-mono` (served to the UI from their own paths, so the OFL license stays with Debian's packages), `docker-ce`, `docker-compose-plugin`, `libvirt-daemon-system`, `samba`, `wsdd2`, `avahi-daemon`, `mergerfs`, `novnc`, `websockify`, `chromium`, …; Recommends: `snapraid` (NOTE-26) | Creates the groups `nimbus-control` and `nimbus-smb`, the system users `nimbus-control` and `nimbus-guest` (NOTE-25), and adds `nimbus-control` to `docker`, `libvirt` and `nimbus-smb`. Runs schema migrations step by step. Adds the smb.conf include (NOTE-23) and the `adduser.conf` keys (NOTE-09). Enables services on first install only. Restarts its own services only when their files changed |
-| `nimbus-catalog` | `/usr/share/nimbus-control/catalog/<app-id>/` | Enhances: `nimbus-control` | none. The backend notices catalog changes on its own and marks installed stacks with "Template update available" |
+| `nimbus-control` | backend, frontend, `nimbus-privd`, units, Samba drop-in, polkit action, launcher | Depends: the Python stack (`python3-fastapi`, `python3-uvicorn`, `python3-websockets`, `python3-multipart`, `python3-docker`, `python3-libvirt`, `python3-psutil`, `python3-jinja2`, `python3-yaml`, `python3-jsonschema`, `python3-systemd`); `fonts-inter`, `fonts-jetbrains-mono` (served to the UI from their own paths, so the OFL license stays with Debian's packages); Docker (`docker-ce`, `docker-ce-cli`, `docker-compose-plugin`); libvirt and QEMU (`libvirt-daemon-system`, `libvirt-daemon-driver-qemu`, `libvirt-daemon-config-network`, `libvirt-clients`, `qemu-system-x86`, `qemu-utils`, `ovmf`, `swtpm-tools`); consoles (`novnc`, `websockify`); NAS (`samba`, `samba-common-bin`, `samba-vfs-modules`, `smbclient`, `wsdd2`, `avahi-daemon`); storage (`mergerfs`, `smartmontools`, `parted`, `xfsprogs`, `btrfs-progs`, `e2fsprogs`); `iptables`, `pkexec`, `chromium`. Recommends: `snapraid` (NOTE-26) | sysusers.d: users `nimbus-control` and `nimbus-guest`, groups `nimbus-control` and `nimbus-smb`; `nimbus-control` joins `docker`, `libvirt` and `nimbus-smb` (NOTE-25). tmpfiles.d: its directories. postinst: the smb.conf include on every configure (NOTE-23). On first install only: the `adduser.conf` keys (NOTE-09), nmbd off, and libvirt's default network on autostart. Starts units only through `deb-systemd-invoke`, and restarts them only when the package's files changed (NOTE-61). State migrations run as the service's ExecStartPre (NOTE-59). prerm: stops the units on removal. postrm (purge): removes only the Control Center's own state, caches and Samba configuration, never user data, and prints what was kept (NOTE-58) |
+| `nimbus-catalog` | `/usr/share/nimbus-control/catalog/<app-id>/` (manifest with its own `template_version`, compose template, icon) and `manifest.schema.json` | Enhances: `nimbus-control`. Build-Depends: `python3-jsonschema` for the build-time check | none at all, so installing or upgrading it can't touch installed stacks. A bad manifest fails the build (NOTE-60). The backend compares versions and marks installed stacks with "Template update available" |
 | `nimbusos-desktop` | nothing but docs | Depends: `${nimbus:ListDepends}` (generated; 103 packages as of deliverable 3) + the six packages above at `(>= ver)` | none |
 
 Rules applied to all seven: lintian-clean or a justified override; idempotent, upgrade-safe maintainer scripts; user-editable files are conffiles or `.d` drop-ins; services restarted with `deb-systemd-invoke` only when their files changed (`dh_installsystemd --no-restart-after-upgrade` plus a checksum comparison in postinst).
@@ -216,12 +217,14 @@ Rules applied to all seven: lintian-clean or a justified override; idempotent, u
 
 | Path | Owner / mode | What |
 |---|---|---|
-| `/usr/lib/nimbus-control/` | root | backend, `nimbus_common`, privd (`nimbus-privd.py`), `www/`, `bin/` |
+| `/usr/lib/nimbus-control/` | root | backend, `nimbus_common`, privd (`nimbus-privd.py`), `www/`, `bin/`, `migrations/` |
 | `/usr/share/nimbus-control/catalog/` | root | catalog (`nimbus-catalog`) |
-| `/var/lib/nimbus-control/` | `nimbus-control` 0750 | `schema_version`, `settings.json`, `shares.json`, `stacks.json`, `stacks/<stack>/` |
-| `/var/lib/nimbus-vms/{isos,images}/` | isos: `nimbus-control`; images: libvirt pool `nimbus-images` | ISO library (NOTE-27), qcow2 disks |
-| `/var/lib/nimbus-privd/` | root 0700 | SMB user registry, SMART/parity cache, fstab backups |
-| `/run/nimbus-control/token` | `nimbus-control:nimbus-control` 0640 | per-boot API token (tmpfs, so it is new every boot) |
+| `/var/lib/nimbus-control/` | `nimbus-control` 0750 (tmpfiles.d) | state files at the top (`schema_version`, `settings.json`, `shares.json`, `stacks.json`); `backups/`, the last 5 copies made before a migration; `stacks/<stack>/`, app data, which migrations never touch and purge keeps (NOTE-58, NOTE-59) |
+| `/var/lib/nimbus-vms/{isos,images}/` | isos: `root:nimbus-smb` 2775, like a share, because an `isos` share may be bind-mounted onto it; images: root 0711, libvirt pool `nimbus-images` | ISO library (NOTE-27), qcow2 disks |
+| `/var/lib/nimbus-privd/` | root 0700 | SMB user registry and fstab backups (kept on purge); `package/`: the original `adduser.conf` and a checksum of the package's files (removed on purge) |
+| `/var/cache/nimbus-privd/` | root 0700 | SMART/parity cache |
+| `/run/nimbus-control/token` | `nimbus-control:nimbus-control` 0640 | per-boot API token (tmpfs, so it is new every boot; the directory comes from tmpfiles.d) |
+| `/run/nimbus-control/vnc-tokens/` | `nimbus-control` 0750 | websockify's TokenFile entries, one per open VM console |
 | `/etc/samba/nimbus/nimbus.conf` | conffile | static secure globals; includes the two generated files |
 | `/etc/samba/nimbus/settings.conf`, `/etc/samba/nimbus-shares.conf` | generated by privd | workgroup/NetBIOS/guest mapping; the shares |
 | `/etc/avahi/services/smb.service` | generated by privd | `_smb._tcp` (+ `_adisk._tcp` when a Time Machine share exists) |
@@ -320,7 +323,7 @@ Because live-build only places keys at that fixed `trusted.gpg.d/<name>.asc` pat
 
 **NOTE-08 — The SDDM greeter stays on X11.** SDDM's Wayland greeter is less dependable in VMs and on some GPUs, so the login screen uses Debian's default X11 greeter with the NimbusOS QML theme. The **session** defaults to Plasma (Wayland): the live autologin uses `Session=plasma`, and new installs get SDDM's last-session state pre-set to `plasma.desktop`. Plasma (X11) remains selectable.
 
-**NOTE-09 — `/etc/adduser.conf`.** The file belongs to the `adduser` package and has no drop-in directory. The `nimbus-control` postinst therefore sets exactly two keys in place, `EXTRA_GROUPS="docker libvirt kvm nimbus-control"` and `ADD_EXTRA_GROUPS=1`. It does this idempotently and only when they differ. This is a deliberate, documented exception to Debian Policy §10.7.4. `EXTRA_GROUPS` only applies to accounts made with `adduser`. Plasma's Users settings page creates accounts through AccountsService and `useradd`, which ignore it. For such users the launcher detects the missing group and offers **Grant access**, which asks for an administrator password through polkit; the user then logs out and back in.
+**NOTE-09 — `/etc/adduser.conf`.** The file belongs to the `adduser` package and has no drop-in directory. The `nimbus-control` postinst therefore sets exactly two keys in place, `EXTRA_GROUPS="docker libvirt kvm nimbus-control"` and `ADD_EXTRA_GROUPS=1`. It does this on the first install only, so an administrator's later change survives upgrades. It keeps a copy of the original file in `/var/lib/nimbus-privd/package/`, and on purge puts the original lines back where the keys still have the values it set (tested: Debian's file comes back byte-identical). This is a deliberate, documented exception to Debian Policy §10.7.4. `EXTRA_GROUPS` only applies to accounts made with `adduser`. Plasma's Users settings page creates accounts through AccountsService and `useradd`, which ignore it. For such users the launcher detects the missing group and offers **Grant access**, which asks for an administrator password through polkit; the user then logs out and back in.
 
 **NOTE-10 — How Plasma theme updates reach existing users.** The global theme, panel layout and wallpaper are applied at a user's first login. After that, Plasma stores them per user, and NimbusOS does not overwrite them. Colors, accent, icons, fonts, widget style and KWin effects come from `/etc/xdg` defaults, so existing users do get updates there unless they changed those settings themselves.
 
@@ -349,7 +352,7 @@ Because live-build only places keys at that fixed `trusted.gpg.d/<name>.asc` pat
 
 **NOTE-19 — Docker blocks libvirt forwarding.** Docker sets the iptables `FORWARD` policy to `DROP`, which breaks forwarded traffic for libvirt guests. `nimbus-netfix.service` (After/PartOf `docker.service`) adds `DOCKER-USER` accept rules for `virbr+` interfaces, as Docker's documentation describes for routing other traffic through the host.
 
-**NOTE-20 — libvirt daemons.** Trixie's `libvirt-daemon-system` may use the modular daemons (`virtqemud`, `virtnetworkd`, `virtstoraged`, socket-activated) instead of the monolithic `libvirtd`. The postinst enables whichever the installed version provides, and the service-health alert checks the same units. The `default` NAT network is set to autostart on first install by creating `/etc/libvirt/qemu/networks/autostart/default.xml` (a symlink to `../default.xml`), which needs no running daemon.
+**NOTE-20 — libvirt daemons (checked in Trixie, deliverable 5).** libvirt 11.3 in Trixie runs the monolithic `libvirtd`: `libvirtd.service`, `libvirtd.socket` and `virtlogd.socket` are enabled by `libvirt-daemon-system` itself, and the modular `virtqemud` units aren't shipped. So the postinst enables nothing for libvirt, and the service-health alert checks `libvirtd`. `libvirt-daemon-config-network` installs the `default` NAT network but leaves `autostart/` empty. On first install the postinst therefore creates `/etc/libvirt/qemu/networks/autostart/default.xml` → `/etc/libvirt/qemu/networks/default.xml`, the same link `virsh net-autostart` makes, which needs no running daemon and takes effect when libvirtd next starts.
 
 **NOTE-21 — The live session.** The live root filesystem is an overlay, which Docker's `overlay2` storage driver cannot sit on. A live-only mount unit therefore puts `/var/lib/docker` on tmpfs: apps work but are gone at shutdown. Disk formatting and pool changes are disabled behind the banner "Install NimbusOS to set up storage"; read-only views work.
 
@@ -466,6 +469,56 @@ The `*.list.binary` files are never read: they only fill the ISO's package pool,
 - **Login screen:** the SDDM theme declares `QtVersion=6` for the `sddm-greeter-qt6` in Trixie and uses only QtQuick, QtQuick.Controls and SDDM's context objects.
 - **Installer:** Calamares (Qt 6 with SVG support) uses the logo as SVG directly.
 - **CC-BY-SA-4.0 text:** in `debian/copyright` it is byte-identical to SPDX `text/CC-BY-SA-4.0.txt` at commit `31846481de7ea17d92f2f46fad76abe58b2e9bb0` (SHA-256 `cde7883b…4beba54966`), noted in the file.
+
+### Found while packaging the Control Center (deliverable 5, part 3)
+
+**NOTE-58 — Purging nimbus-control never deletes user data.**
+- **Removed on purge** (the Control Center's own configuration and caches):
+  - the regular files at the top of `/var/lib/nimbus-control` (`schema_version`, `settings.json`, `shares.json`, `stacks.json` and any later state file) and its `backups/`;
+  - `/var/cache/nimbus-privd`, `/run/nimbus-control` and `/var/lib/nimbus-privd/package/`;
+  - the include block in `smb.conf`, together with the blank line before it, so the file comes back byte-identical;
+  - `/etc/samba/nimbus/`: dpkg removes the conffile `nimbus.conf`, postrm the generated `settings.conf`. Also `/etc/samba/nimbus-shares.conf`;
+  - `/etc/avahi/services/smb.service`, but only if it carries privd's marker comment `Generated by nimbus-control` (deliverable 8 writes it);
+  - the two `adduser.conf` keys (NOTE-09).
+- **Kept:**
+  - `stacks/` with app data and volumes, container-owned files included;
+  - `/var/lib/nimbus-vms` (VM disks and ISOs);
+  - `/mnt/user`, `/mnt/disks`, `/mnt/parity` and every share folder;
+  - SMB users and their Samba passwords;
+  - the managed `/etc/fstab` block;
+  - `/etc/nimbus/snapraid.conf`. It is configuration, but without it the parity can't be used to recover a disk;
+  - `/var/lib/nimbus-privd` (SMB user list, fstab backups);
+  - the system accounts. sysusers.d never removes accounts, and files and SMB users stay owned by them.
+- **What the user sees:** purge prints the kept paths that exist, with the SMB user names, and says that Samba no longer serves the NimbusOS shares.
+- **Remove:** `remove` keeps everything, as Debian does for configuration, so Samba keeps serving the shares.
+
+**NOTE-59 — State migrations.**
+- **Where it runs:** `nimbus-migrate` is the `ExecStartPre=` of `nimbus-control.service`. It runs as the `nimbus-control` user inside the service's sandbox, so every start (the first after an upgrade included) migrates first, and a failure keeps the backend from starting on half-migrated state. It doesn't run in the postinst: there it would run as root, and in the image build chroot there is no state until first boot.
+- **Steps:** `control-center/migrations/NNNN_name.py`, each with `DESCRIPTION` and `migrate(ctx)`, numbered without gaps and installed to `/usr/lib/nimbus-control/migrations/`. A step changes state files only through `ctx.read_json`, `ctx.write_json` and `ctx.remove`, which accept plain top-level `*.json` names.
+- **A run:**
+  1. Take a lock.
+  2. Copy the state files to `backups/schema-<from>-<UTC time>/`. The last 5 copies are kept.
+  3. Run each step, writing `schema_version` after it atomically (temporary file, fsync, rename).
+  4. On any exception: restore every state file from the backup, log one line at priority err (identifier `nimbus-migrate`, with the step, schemas, backup path and full traceback as journal fields) and exit 1. Example: `state migration 0003 (break things) failed: OSError: [Errno 28] No space left on device. The state files were restored from /var/lib/nimbus-control/backups/schema-2-… (schema 2). nimbus-control will not start until this is fixed. …`
+- **Refused without changing anything:** state newer than the newest step (a downgrade, exit 3), state files without `schema_version` (exit 3), and a gap in the step numbers (exit 2). `stacks/` is never read, written or backed up.
+- **Schema 1 (`0001_initial`):** `settings.json` `{}`, `shares.json` `{"shares": []}`, and `stacks.json` `{"stacks": {}}`, where each stack records its catalog app id and the `template_version` it was created from (NOTE-60). Deliverable 8 reads and writes these.
+
+**NOTE-60 — Template versions.**
+- **The field:** every app manifest has `template_version`, a whole number of at least 1. It is raised whenever the app's compose template or its inputs change. Deliverable 9 adds it to `manifest.schema.json` and `SCHEMA.md`.
+- **Build check:** `packages/nimbus-catalog/debian/check-catalog.py` runs at build time and enforces `template_version` independently of the schema. It also checks that the id equals the directory name, that the required files exist, that there are no symbolic links, and that each manifest passes the schema. One bad manifest fails the build.
+- **Template update available:** an installed stack records in `stacks.json` the version it was created from. When the installed manifest's version is higher, the Control Center shows "Template update available". Applying the update is the user's action (deliverable 8).
+- **No maintainer scripts:** `nimbus-catalog` has none, so installing, upgrading or purging it can't touch a stack (tested).
+
+**NOTE-61 — nimbus-control's maintainer scripts and services, including the image build chroot.**
+- **debhelper:** accounts come before directories. `dh_installsysusers` is called explicitly, because compat 13's sequence doesn't include it, and it runs before `dh_installtmpfiles`. Then `dh_installsystemd --no-start --no-stop-on-upgrade` enables the units but never starts or stops them. With `--no-start`, debhelper also leaves out the stop on removal, so the package's own prerm stops the units on `remove`.
+- **Starting:** only through `deb-systemd-invoke`. It asks policy-rc.d first, and a 101 (live-build's chroot policy) makes it do nothing (checked in Trixie's init-system-helpers). On upgrades, nimbus-control is restarted only if the checksum of the package's files under `/usr/lib` changed; privd is then stopped (socket activation starts the new code) and netfix re-run. Otherwise the postinst only "starts", which changes nothing for a running unit and nothing for a unit the administrator disabled.
+- **systemctl:** one call, on first install: `systemctl --no-reload disable nmbd.service`, which also works offline. lintian's warning is overridden with that reason. Trixie's samba, wsdd2, avahi-daemon and libvirt-daemon-system enable their own units on install (checked), so nimbus-control enables nothing else.
+- **Forbidden commands:** no maintainer script calls docker, virsh or smbcontrol. The test checks this statically and with call-logging wrappers.
+- **Units:** `nimbus-control.service` runs nimbus-migrate first and has the §4.3 hardening, with `ReadWritePaths=` `/var/lib/nimbus-control`, `/run/nimbus-control` and `-/var/lib/nimbus-vms/isos`. Directories come from tmpfiles.d, not `StateDirectory=`, which would chown recursively over container-owned files. The SnapRAID and recycle-bin timers are always enabled; the SnapRAID service has `ConditionPathExists=` for its config and binary.
+- **What deliverable 8 must provide:**
+  - the programs the units start: `nimbus-control-server`, `privd/nimbus-privd.py`, `nimbus-snapraid-run`, `nimbus-recycle-clean`, `nimbus-netfix` (which must exit 0 while Docker's `DOCKER-USER` chain doesn't exist yet);
+  - their lines in `debian/install`;
+  - the Avahi marker comment (NOTE-58).
 
 ### Found by the Trixie archive check (deliverable 3)
 
@@ -586,6 +639,53 @@ How to read it: the NimbusOS and Docker repositories offer `bash` 99.0 and 98.0,
 - **Rendering:** checked by eye from the built package. The wallpaper shows a dark sky with a blue glow top left, a violet glow bottom right, soft cloud bands and faint stars. The logo is one cloud with a blue-to-violet gradient: a first render showed a seam because each shape used its own gradient box, fixed with one `userSpaceOnUse` gradient.
 - **Two build errors found and fixed:** XML forbids `--` inside comments, and an SVG comment mentioned the CSS variable `--bg`.
 
+**Deliverable 5, part 3** (`nimbus-control`, `nimbus-catalog`, 2026-11-18, `dev-shell.sh` clone mode, all suites in one fresh container):
+- **Build:** `nimbus-control` builds and lintian is clean, with two overrides whose reasons are in the file (the one `systemctl disable`, and `WantedBy=docker.service`). The `nimbus-catalog` test build is lintian-clean with no overrides.
+- **`control-center/tests/test_migrate.py`:** 10 passed (pytest 8.3.5). Covered:
+  - fresh install;
+  - an upgrade from a fake older version through steps 2 and 3, in order, with a backup;
+  - a failing step and a broken step file, both restored byte for byte with one message;
+  - downgrade refused, state without `schema_version` refused, a second run that changes nothing, at most 5 backups, and a gap in step numbers rejected.
+- **`packages/nimbus-control/tests/maintscripts.test.sh`:** 82 passed. The container behaves like the image chroot: no systemd, and policy-rc.d exits 101. Covered:
+  - every Depends and Recommends resolves in Trixie plus Docker's repository;
+  - the static check, with a self-test;
+  - first install of a fake older version: accounts, groups, modes, the include once, `testparm` accepting the result (guest account, mDNS off, NetBIOS off, SMB2_10 minimum), adduser keys, nmbd off, the default network on autostart, units enabled, starts only via `deb-systemd-invoke`, and ExecStartPre creating schema 1 as `nimbus-control`;
+  - upgrade: the administrator's nmbd, wsdd2 and EXTRA_GROUPS choices kept; a restart because files changed, but only a start on a reinstall with the same files; user data and state unchanged;
+  - the installed nimbus-migrate as the service user: step 2 with a backup it owns, a failing step 3 restored with one message, and a downgrade refused;
+  - remove keeps everything;
+  - purge: user data byte for byte with owners, the SMB user and password, the fstab block, `smb.conf` byte-identical, adduser restored except the administrator's line;
+  - no docker, virsh, smbcontrol, invoke-rc.d or service call at any point.
+  The purge message:
+
+  ```
+  nimbus-control: removed the Control Center's settings, caches and Samba configuration.
+  Samba no longer serves the NimbusOS shares. Your data was kept; delete it yourself if
+  you no longer need it:
+    /var/lib/nimbus-control/stacks     app stacks with their data and volumes
+    /var/lib/nimbus-vms                VM disks (images/) and ISO files (isos/)
+    /mnt/user                          the storage pool
+    /mnt/disks                         data disks
+    /mnt/parity                        parity disks
+    /srv/nimbus/shares                 shared folders on the system disk
+    /etc/nimbus/snapraid.conf          SnapRAID configuration (needed to use the parity)
+    /var/lib/nimbus-privd              SMB user list and /etc/fstab backups
+    /etc/fstab                         the '# BEGIN nimbus' block that mounts your disks
+    SMB users                          alice (with their Samba passwords)
+    system accounts                    nimbus-control, nimbus-guest and the group nimbus-smb
+  ```
+
+- **`packages/nimbus-catalog/tests/catalog.test.sh`:** 30 passed. Covered:
+  - 13 check-catalog cases (a good catalog, and 12 rejections each with its own message);
+  - the build failing on a manifest without `template_version`;
+  - no maintainer scripts in the package;
+  - an upgrade with a changed grafana template that leaves the installed stack byte for byte unchanged, with "Template update available" true for grafana only;
+  - a purge that leaves the stack alone.
+- **Found while testing:**
+  - compat 13 doesn't run `dh_installsysusers`;
+  - `--no-start` also drops debhelper's stop on removal, so the package has its own prerm (NOTE-61);
+  - `testparm` prints SMB2_10 under its canonical name `SMB2`, so the test compares with an explicit SMB2_10 instead;
+  - running the catalog test first left a simulated state directory behind, which nimbus-migrate rightly refused (exit 3). Both tests now require a clean `/var/lib/nimbus-control`, and the catalog test removes its own.
+
 **os-release, unattended-upgrades, Docker and Calamares** (`os-identity.test.sh`, NimbusOS os-release installed). Excerpts:
 
 ```
@@ -637,11 +737,11 @@ Facts confirmed by reading live-build `1:20250505+deb13u1`'s own scripts and Deb
 | 2 | Build entry point | `build/nimbus.conf`, `build/build.sh`, `build/lib/common.sh`, `tools/build-debs.sh`, `tools/deb-version.sh` |
 | 3 | Package lists | `build/config/package-lists/*`, `tools/gen-desktop-depends.sh`, `tools/verify-trixie.sh`, `tools/dev-shell.sh`, `tools/tests/{deb-version,image-apt-check}.test.sh` |
 | 4 | Build-time archives | `build/config/archives/{docker.list.chroot,docker.key.chroot,docker.list.binary}`, `tools/fetch-docker-key.sh`, `tools/tests/docker-archive.test.sh` |
-| 5 | Debian packaging (7 packages), in three parts | **Part 1:** `packages/{nimbusos-archive-keyring,nimbusos-docker-keyring,nimbusos-release,nimbusos-desktop}/**` (os-release, source, pinning with the `apt-cache policy` proof, unattended-upgrades drop-ins, `nimbus-update`, timers, Flathub setup, tests), plus `build-debs.sh` token rendering, mode normalization and `--only`. **Part 2 (done):** `packages/nimbusos-branding/**` (all themes and art, CC-BY-SA-4.0 text from SPDX, install test). **Part 3:** `packages/{nimbus-control,nimbus-catalog}/debian/**` and their maintainer-script tests |
+| 5 | Debian packaging (7 packages), in three parts | **Part 1:** `packages/{nimbusos-archive-keyring,nimbusos-docker-keyring,nimbusos-release,nimbusos-desktop}/**` (os-release, source, pinning with the `apt-cache policy` proof, unattended-upgrades drop-ins, `nimbus-update`, timers, Flathub setup, tests), plus `build-debs.sh` token rendering, mode normalization and `--only`. **Part 2 (done):** `packages/nimbusos-branding/**` (all themes and art, CC-BY-SA-4.0 text from SPDX, install test). **Part 3 (done):** `packages/{nimbus-control,nimbus-catalog}/{debian,tests}/**`, plus the parts of `control-center/` the packaging runs: `systemd/*` (all units), `data/samba/nimbus.conf`, `bin/nimbus-migrate`, `migrations/0001_initial.py` and `tests/test_migrate.py` (NOTE-58 to NOTE-61) |
 | 6 | Live hooks | `build/config/hooks/live/*.hook.chroot` |
 | 7 | Live-only files and boot menus | `build/config/includes.chroot_after_packages/**`, `build/config/bootloaders/**` |
-| 8 | Nimbus Control Center | `control-center/**` (backend, common, privd, frontend, bin, systemd, data, tests), in several batches |
-| 9 | Catalog | `catalog/SCHEMA.md`, `catalog/manifest.schema.json`, 10 apps |
+| 8 | Nimbus Control Center | `control-center/**` (backend, common, privd, frontend, the remaining bin programs, data, tests), in several batches, each adding its lines to `packages/nimbus-control/debian/install` (NOTE-61) |
+| 9 | Catalog | `catalog/SCHEMA.md`, `catalog/manifest.schema.json` (with `template_version`, NOTE-60), 10 apps |
 | 10 | CI/CD and docs (CI also runs `tools/tests/*.test.sh` and `tools/fetch-docker-key.sh --verify-local` / `--check`) | `.github/workflows/*`, `.github/dependabot.yml`, `apt/conf/*`, `tools/{publish-apt.sh,releases-json.py,split-iso.sh,pin-actions.sh}`, `control-center/tests/integration/samba-ucf-keeps-include.sh`, `README.md`, `LICENSE`, `LICENSES/*`, `.shellcheckrc`, `ruff.toml`, `docs/{RELEASING,SIGNING}.md`, `docs/release-notes/v0.1.0.md` |
 | 11 | Testing (the smoke test includes `systemctl --user show-environment \| grep XDG_CONFIG_DIRS` and kinfocenter's About page after a graphical login, NOTE-55) | `docs/TESTING.md`, `tools/qemu-test.sh` |
 
@@ -657,3 +757,9 @@ Facts confirmed by reading live-build `1:20250505+deb13u1`'s own scripts and Deb
 6. **Test environment.** `tools/dev-shell.sh` runs a `debian:trixie` container with Docker or Podman. The version-mapping tests pass there with real `dpkg` 1.22.22: 40 of 40 checks.
 7. **APT repository and Docker key rotation** (before deliverable 5). `apt-ftparchive` replaces `reprepro`, with the requirements in NOTE-52. A weekly job runs `fetch-docker-key.sh --check`; on a change it fails and opens one issue, and it never updates the key (NOTE-05). The maintainer's address appears only in the `Maintainer` field and `debian/changelog` (A11, NOTE-49).
 8. **Themes through Debian's alternatives** (before deliverable 5, part 3). NimbusOS is desktop-base's `desktop-theme` at priority 80, and every desktop-base background, login and GRUB alternative follows it. Plymouth and GRUB regeneration keep their direct handling, because Trixie has neither a Plymouth alternative nor an `update-grub` trigger (NOTE-56). NOTE-55's session path is confirmed, and it gets a check in the deliverable 11 smoke test.
+9. **Rules for nimbus-control and nimbus-catalog** (deliverable 5, part 3):
+   - accounts from sysusers.d and directories from tmpfiles.d;
+   - purge never deletes user data and says what it kept (NOTE-58);
+   - maintainer scripts work in the image build chroot, start and restart only through `deb-systemd-invoke`, and never call docker, virsh or smbcontrol (NOTE-61);
+   - state migrations run step by step through `schema_version`, with a backup first and one clear journal message on failure (NOTE-59);
+   - each app manifest has its own `template_version` (NOTE-60).

@@ -1,0 +1,24 @@
+#!/bin/sh
+# =============================================================================
+# prerm for nimbus-control
+# =============================================================================
+# What: on removal, stops the Control Center's units through
+#       deb-systemd-invoke (which respects policy-rc.d) before their files go.
+#       Upgrades don't stop anything: the old version keeps running until
+#       the new postinst restarts it, and only if the files changed.
+# Why:  with "dh_installsystemd --no-start" debhelper generates no stop
+#       snippet, so this script does it (docs/PLAN.md NOTE-61).
+# =============================================================================
+set -e
+
+case "$1" in
+	remove)
+		deb-systemd-invoke stop nimbus-control.service nimbus-websockify.service \
+			nimbus-privd.socket nimbus-privd.service nimbus-netfix.service \
+			nimbus-snapraid-sync.timer nimbus-recycle-clean.timer >/dev/null || true
+		;;
+esac
+
+#DEBHELPER#
+
+exit 0

@@ -288,7 +288,9 @@ def migrate(state_dir, migrations_dir):
             step.migrate(Context(state_dir, step))
             write_schema(state_dir, step.version)
         except Exception as e:  # any failure: restore, report, stop
-            detail = "".join(traceback.format_exception_only(type(e), e)).strip()
+            # One line for the message; the full traceback goes into the
+            # journal entry's NIMBUS_TRACEBACK field.
+            detail = " ".join(f"{type(e).__name__}: {e}".split())
             try:
                 restore_backup(state_dir, backup)
                 restored = f"The state files were restored from {backup} (schema {current})."
