@@ -1,0 +1,8 @@
+{# control-center/tests/fixtures/catalog/demo-web: test fixture template.
+   The engine adds ports, volumes, environment and restart to "web". #}
+services:
+  web:
+    image: "docker.io/library/nginx:1.27"
+    environment:
+      SITE_NAME: {{ stack | q }}
+      PUBLIC_URL: {{ ("http://" ~ hostname ~ ":" ~ ports.http) | q }}

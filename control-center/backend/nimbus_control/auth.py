@@ -35,7 +35,7 @@ TOKEN_RE = re.compile(r"[A-Za-z0-9_-]{43}")
 WS_PROTOCOL = "nimbus.v1"
 WS_TOKEN_PREFIX = "nimbus.token."
 PUBLIC_EXACT = {"/", "/index.html", "/style.css", "/app.js", "/logo.svg", "/api/session/exchange"}
-PUBLIC_PREFIXES = ("/lib/", "/views/", "/fonts/")
+PUBLIC_PREFIXES = ("/lib/", "/views/", "/fonts/", "/catalog-icons/")
 
 
 class TokenStore:

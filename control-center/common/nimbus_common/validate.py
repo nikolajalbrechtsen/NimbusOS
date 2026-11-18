@@ -7,7 +7,9 @@
 #         stack_name, share_name, vm_name, smb_user, disk_label, port,
 #         path_under (resolved with realpath; must stay inside an allowed
 #         root, so ".." and symlinks can't escape), one_of, int_range,
-#         job_id
+#         job_id; for apps: app_id, relative_path (inside an app's
+#         folder), env_name, network_name (also Docker volume names),
+#         container_path, RESTART_POLICIES
 # Why:  docs/PLAN.md §4.3 (input validation): names become directory names,
 #       Samba section names, compose project names and libvirt domain names;
 #       ports and paths reach docker and Samba. privd runs these again on
@@ -94,6 +96,41 @@ def one_of(value, choices, field):
 def job_id(value, field="id"):
     """Opaque job ids (hex), as used for transient unit names."""
     return _match(field, value, r"[0-9a-f]{12}", "Not a valid job id.")
+
+
+def app_id(value, field="app"):
+    """Catalog app ids (the directory names in the catalog)."""
+    return _match(field, value, r"[a-z0-9][a-z0-9-]{0,62}", "Not a catalog app id.")
+
+
+def relative_path(value, field="path"):
+    """A path inside an app's folder: up to 8 plain components, no '.' or '..'."""
+    _match(field, value, r"[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+){0,7}",
+           "Folders inside an app may use letters, digits, '.', '-' and '_', separated by '/'.")
+    if any(part in (".", "..") for part in value.split("/")):
+        raise ValidationError(field, "'.' and '..' are not allowed in folder names.")
+    return value
+
+
+def env_name(value, field="name"):
+    return _match(field, value, r"[A-Za-z_][A-Za-z0-9_]{0,63}",
+                  "Variable names may use letters, digits and '_', and not start with a digit.")
+
+
+def network_name(value, field="network"):
+    """Docker network names (also volume names)."""
+    return _match(field, value, r"[A-Za-z0-9][A-Za-z0-9_.-]{0,62}",
+                  "Network names may use letters, digits, '.', '-' and '_'.")
+
+
+def container_path(value, field="container"):
+    """An absolute path inside a container."""
+    if not isinstance(value, str) or not re.fullmatch(r"/[^\x00:\n]{0,255}", value) or "/../" in f"{value}/":
+        raise ValidationError(field, "Container paths are absolute, like /config.")
+    return value
+
+
+RESTART_POLICIES = ("no", "always", "unless-stopped", "on-failure")
 
 
 def path_under(value, roots, field="path", must_exist=False):

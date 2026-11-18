@@ -9,6 +9,9 @@
 //         toast(), modal() (Esc and backdrop close, sticky head and foot,
 //         a hint on the left of the foot), confirmDialog() (in-page, never
 //         confirm(); optional "type X to confirm"), logDrawer();
+//       form parts: input(), select(), checkbox(), field() (a label with a
+//         key matching the "field" an API error names), markInvalid() and
+//         clearInvalid() (highlight that input and show the message);
 //       and formatters: bytes, percent, duration, timeAgo, dateTime.
 // Why:  spec "UI design system": components, behaviour, accessibility.
 // =============================================================================
@@ -273,6 +276,58 @@ export function logDrawer(title) {
   closeBtn.addEventListener("click", () => api.close());
   openDrawer = api;
   return api;
+}
+
+// --- forms ---------------------------------------------------------------------------------------
+// input({value, type, placeholder, mono, label, onInput}); the label becomes aria-label.
+export function input({ value = "", type = "text", placeholder = "", mono = false, label = null, onInput = null, disabled = false, min = null, max = null } = {}) {
+  const el = h("input", { class: mono ? "input mono" : "input", type, placeholder, "aria-label": label, disabled, min, max,
+    autocomplete: "off", spellcheck: "false" });
+  el.value = value === null || value === undefined ? "" : String(value);
+  if (onInput) el.addEventListener("input", () => onInput(el.value));
+  return el;
+}
+
+export function select(options, value, { label = null, onChange = null } = {}) {
+  const el = h("select", { class: "input", "aria-label": label },
+    options.map((o) => h("option", { value: o.value, text: o.label })));
+  el.value = value;
+  if (onChange) el.addEventListener("change", () => onChange(el.value));
+  return el;
+}
+
+export function checkbox(labelText, checked, onChange) {
+  const box = h("input", { type: "checkbox" });
+  box.checked = Boolean(checked);
+  box.addEventListener("change", () => onChange && onChange(box.checked));
+  return h("label", { class: "check" }, box, h("span", { text: labelText }));
+}
+
+// field(label, control, {hint, key}): key matches the "field" an API error names.
+export function field(labelText, control, { hint = null, key = null } = {}) {
+  return h("label", { class: "field", "data-field": key }, h("span", { text: labelText }), control,
+    hint ? h("small", { class: "dim", text: hint }) : null);
+}
+
+// markInvalid(root, key, message): highlight the input an API error is about.
+export function markInvalid(root, key, message) {
+  clearInvalid(root);
+  const holder = key && (root.querySelector(`[data-field="${CSS.escape(key)}"]`) ||
+    root.querySelector(`[data-field="${CSS.escape(key.split(".").slice(0, 2).join("."))}"]`));
+  if (!holder) return false;
+  const control = holder.matches("input, select, textarea") ? holder : holder.querySelector("input, select, textarea");
+  if (control) {
+    control.classList.add("invalid");
+    control.setAttribute("aria-invalid", "true");
+    control.focus();
+  }
+  holder.appendChild(h("small", { class: "error", text: message }));
+  return true;
+}
+
+export function clearInvalid(root) {
+  root.querySelectorAll(".invalid").forEach((el) => { el.classList.remove("invalid"); el.removeAttribute("aria-invalid"); });
+  root.querySelectorAll("small.error").forEach((el) => el.remove());
 }
 
 // --- formatting ---------------------------------------------------------------------------------

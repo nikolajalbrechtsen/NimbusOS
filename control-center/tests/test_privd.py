@@ -15,8 +15,13 @@
 #           fixed argument list; bad values never reach it;
 #         - install starts nimbus-update as a transient systemd unit (no shell),
 #           and refuses while another one runs;
-#         - follow streams the unit's journal and reports its exit status.
-# Why:  docs/PLAN.md §4.3, NOTE-15, NOTE-35.
+#         - follow streams the unit's journal and reports its exit status;
+#       and the stack verbs on a temporary stacks folder:
+#         - prepare_volume makes the folder and hands only it to the
+#           container's user; delete_data removes one stack folder;
+#         - neither follows a symbolic link: not one planted inside a stack,
+#           not a stack that is a link, not the stacks folder swapped for one.
+# Why:  docs/PLAN.md §4.3, NOTE-15, NOTE-31, NOTE-35.
 # =============================================================================
 
 import asyncio
@@ -30,7 +35,7 @@ import pytest
 from nimbus_common import protocol
 from nimbus_common.validate import smb_user, stack_name
 from nimbus_control.privd_client import PrivdClient, PrivdError
-from nimbus_privd import audit, runner, updates
+from nimbus_privd import audit, runner, stacks, updates
 from nimbus_privd.registry import REGISTRY, Arg, Registry
 from nimbus_privd.server import Server
 
@@ -286,3 +291,90 @@ def test_update_follow_unknown_job(tmp_path, audit_log, fake_runner):
     with pytest.raises(PrivdError) as err:
         call(tmp_path, REGISTRY, "update.follow", {"job": "0123456789ab"})
     assert err.value.code == "invalid_argument" and "no such update run" in err.value.message
+
+
+# --- stack verbs (NOTE-31) -----------------------------------------------------------------
+@pytest.fixture
+def stacks_root(tmp_path, monkeypatch):
+    root = tmp_path / "stacks"
+    (root / "web").mkdir(parents=True)
+    monkeypatch.setattr(stacks, "STACKS", str(root))
+    return root
+
+
+def owner():
+    # As root (the CI container), hand the folder to Grafana's uid; otherwise to ourselves.
+    return (472, 472) if os.geteuid() == 0 else (os.getuid(), os.getgid())
+
+
+def test_prepare_volume_hands_over_one_folder(tmp_path, stacks_root, audit_log):
+    uid, gid = owner()
+    args = {"stack": "web", "path": "data/config", "uid": uid, "gid": gid}
+    result = call(tmp_path, REGISTRY, "stack.prepare_volume", args)
+    assert result == {"path": f"{stacks_root}/web/data/config", "uid": uid, "gid": gid}
+    made = stacks_root / "web" / "data" / "config"
+    assert made.is_dir() and (made.stat().st_uid, made.stat().st_gid) == (uid, gid)
+    assert (stacks_root / "web" / "data").stat().st_uid == os.geteuid()          # not recursive
+    assert call(tmp_path, REGISTRY, "stack.prepare_volume", args) == result      # again: same result
+
+
+@pytest.mark.parametrize("args, field", [
+    ({"stack": "web", "path": "../etc", "uid": 0, "gid": 0}, "path"),
+    ({"stack": "web", "path": "/etc", "uid": 0, "gid": 0}, "path"),
+    ({"stack": "web", "path": "a/./b", "uid": 0, "gid": 0}, "path"),
+    ({"stack": "../x", "path": "data", "uid": 0, "gid": 0}, "stack"),
+    ({"stack": "web", "path": "data", "uid": 70000, "gid": 0}, "uid"),
+    ({"stack": "web", "path": "data", "uid": 0, "gid": True}, "gid"),
+])
+def test_prepare_volume_refuses_bad_arguments(tmp_path, stacks_root, audit_log, args, field):
+    with pytest.raises(PrivdError) as err:
+        call(tmp_path, REGISTRY, "stack.prepare_volume", args)
+    assert err.value.code == "invalid_argument" and err.value.field == field
+    assert sorted(p.name for p in (stacks_root / "web").iterdir()) == []
+
+
+def test_prepare_volume_never_follows_links(tmp_path, stacks_root, audit_log):
+    uid, gid = owner()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (stacks_root / "web" / "data").symlink_to(outside)
+    (stacks_root / "evil").symlink_to(outside)
+    for stack, path in (("web", "data/config"), ("web", "data"), ("evil", "config")):
+        with pytest.raises(PrivdError) as err:
+            call(tmp_path, REGISTRY, "stack.prepare_volume", {"stack": stack, "path": path, "uid": uid, "gid": gid})
+        assert err.value.code == "invalid_argument" and "not a plain folder" in err.value.message
+    assert list(outside.iterdir()) == [] and outside.stat().st_uid == os.geteuid()
+
+
+def test_delete_data_removes_one_stack_folder(tmp_path, stacks_root, audit_log):
+    (stacks_root / "web" / "config").mkdir()
+    (stacks_root / "web" / "config" / "db.sqlite").write_text("data")
+    (stacks_root / "other").mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "keep").write_text("keep")
+    (stacks_root / "web" / "link").symlink_to(outside)
+    assert call(tmp_path, REGISTRY, "stack.delete_data", {"stack": "web"}) == {"deleted": f"{stacks_root}/web"}
+    assert not (stacks_root / "web").exists() and (stacks_root / "other").is_dir()
+    assert (outside / "keep").read_text() == "keep"
+    assert call(tmp_path, REGISTRY, "stack.delete_data", {"stack": "web"}) == {"deleted": None}
+
+
+def test_delete_data_never_follows_links(tmp_path, stacks_root, audit_log):
+    victim = tmp_path / "victim"
+    (victim / "etc").mkdir(parents=True)
+    (victim / "etc" / "passwd").write_text("root:x:0:0")
+    (stacks_root / "etc").symlink_to(victim / "etc")
+    with pytest.raises(PrivdError) as err:
+        call(tmp_path, REGISTRY, "stack.delete_data", {"stack": "etc"})
+    assert err.value.code == "invalid_argument" and "not a plain folder" in err.value.message
+    # The stacks folder (owned by nimbus-control) swapped for a link.
+    stacks_root.rename(tmp_path / "real-stacks")
+    stacks_root.symlink_to(victim)
+    with pytest.raises(PrivdError) as err:
+        call(tmp_path, REGISTRY, "stack.delete_data", {"stack": "etc"})
+    assert err.value.code == "invalid_argument"
+    assert (victim / "etc" / "passwd").read_text() == "root:x:0:0"
+    with pytest.raises(PrivdError) as err:
+        call(tmp_path, REGISTRY, "stack.delete_data", {"stack": "../etc"})
+    assert err.value.field == "stack"

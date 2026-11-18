@@ -22,6 +22,7 @@ class Settings:
     www_dir: str = "/usr/lib/nimbus-control/www"
     os_release: str = "/etc/os-release"
     logo_path: str = "/usr/share/icons/hicolor/scalable/apps/nimbusos.svg"
+    catalog_dir: str = "/usr/share/nimbus-control/catalog"
 
     @classmethod
     def from_env(cls, env=None):

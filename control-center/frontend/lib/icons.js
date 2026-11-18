@@ -39,6 +39,7 @@ const ICONS = {
   chevronRight: [["path", { d: "m9 6 6 6-6 6" }]],
   terminal: [["rect", { x: 3, y: 4, width: 18, height: 16, rx: 2 }], ["path", { d: "m7 9 3 3-3 3M13 15h4" }]],
   history: [["path", { d: "M3.5 12a8.5 8.5 0 1 0 2.6-6.1" }], ["path", { d: "M3.5 4v4.5H8" }], ["path", { d: "M12 8v4.5l3 1.8" }]],
+  eye: [["path", { d: "M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12Z" }], ["circle", { cx: 12, cy: 12, r: 3 }]],
 };
 
 export function icon(name, className = "icon") {

@@ -174,6 +174,6 @@ def main():
         print(f"nimbus-privd: the {SERVICE_USER} user does not exist.", file=sys.stderr)
         return 2
     # Importing the verb modules registers their verbs.
-    from . import system, updates  # noqa: F401
+    from . import stacks, system, updates  # noqa: F401
     asyncio.run(Server(REGISTRY, allowed_uid).serve(sock))
     return 0

@@ -1,0 +1,21 @@
+{
+  "id": "demo-web",
+  "name": "Demo Web",
+  "description": "Test fixture: a web app with a web page, a share-hinted media folder, a config folder owned by uid 472 and a generated admin password.",
+  "category": "Media",
+  "template_version": 2,
+  "main_service": "web",
+  "ports": [
+    {"id": "http", "container": 80, "host": 8080, "description": "Web page"}
+  ],
+  "volumes": [
+    {"id": "config", "container": "/config", "default": "config", "owner": {"uid": 472, "gid": 472}, "description": "Settings"},
+    {"id": "media", "container": "/media", "default": "media", "share_hint": "Media", "description": "Your media"}
+  ],
+  "env": [
+    {"name": "TZ", "default": "Etc/UTC", "description": "Time zone"},
+    {"name": "ADMIN_PASSWORD", "required": true, "secret": true, "generate": "password", "description": "First login"}
+  ],
+  "webui": {"port": "http", "path": "/"},
+  "notes": "Test fixture for control-center/tests; never packaged."
+}

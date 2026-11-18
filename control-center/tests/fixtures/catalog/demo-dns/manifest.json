@@ -1,0 +1,21 @@
+{
+  "id": "demo-dns",
+  "name": "Demo DNS",
+  "description": "Test fixture: DNS on the LAN address with fixed port 53 and a named volume.",
+  "category": "Network",
+  "template_version": 1,
+  "main_service": "dns",
+  "ports": [
+    {"id": "dns_udp", "container": 53, "host": 53, "protocol": "udp", "bind": "lan", "fixed": true, "description": "DNS"},
+    {"id": "dns_tcp", "container": 53, "host": 53, "protocol": "tcp", "bind": "lan", "fixed": true, "description": "DNS"},
+    {"id": "admin", "container": 80, "host": 8081, "description": "Admin page"}
+  ],
+  "volumes": [
+    {"id": "data", "container": "/etc/dns", "kind": "named", "default": "dnsdata", "description": "Settings"}
+  ],
+  "env": [
+    {"name": "WEBPASSWORD", "secret": true, "generate": "hex", "description": "Admin password"}
+  ],
+  "webui": {"port": "admin", "path": "/admin/"},
+  "notes": "Test fixture for control-center/tests; never packaged."
+}

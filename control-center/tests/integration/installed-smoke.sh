@@ -17,6 +17,11 @@
 #         - /api/updates returns the real nimbus-update status through privd;
 #           "Check now" runs apt and reports the unreachable NimbusOS
 #           repository as a classified error, not as "no updates";
+#         - the Apps API answers without Docker running and without
+#           nimbus-catalog: an empty catalog, "Docker isn't running";
+#         - privd's stack verbs, called by the service user, hand a folder
+#           in /var/lib/nimbus-control/stacks to a container's uid and
+#           delete a stack folder holding files the service user can't touch;
 #         - a desktop user in the nimbus-control group can open the socket but
 #           privd refuses them (SO_PEERCRED);
 #         - privd audited each request.
@@ -103,18 +108,43 @@ check "Check now reports the unreachable NimbusOS repository as an error" \
 echo "    errors: $(python3 -c 'import json,sys; print([(e["source"], e["kind"]) for e in json.loads(sys.argv[1])["errors"]])' "$checked")"
 check "a bad channel is refused before privd" sh -c '[ "$(curl -s -o /dev/null -w "%{http_code}" -X PUT -H "Authorization: Bearer $1" -H "Content-Type: application/json" -d "{\"channel\": \"x\"}" http://127.0.0.1:7777/api/updates/channel)" = 422 ]' _ "$TOKEN"
 
+echo "Apps"
+check "the Apps page is served" curl -fsS -o /dev/null http://127.0.0.1:7777/views/apps.js
+apps="$(api http://127.0.0.1:7777/api/apps)"
+check "the apps list says Docker isn't running, and doesn't fail" \
+	python3 -c 'import json,sys; s=json.loads(sys.argv[1]); assert s["apps"] == [] and not s["docker"]["ok"] and "systemctl start docker" in s["docker"]["message"]' "$apps"
+check "the catalog is empty without nimbus-catalog" \
+	python3 -c 'import json,sys; assert json.loads(sys.argv[1]) == {"apps": [], "errors": []}' "$(api http://127.0.0.1:7777/api/catalog)"
+
 echo "privd"
+# client.py [VERB ARGS_JSON]: one request, prints the reply line.
 cat >"$WORK/client.py" <<'EOF'
-import json, socket
+import json, socket, sys
+verb, args = (sys.argv[1], json.loads(sys.argv[2])) if len(sys.argv) > 2 else ("update.status", {})
 s = socket.socket(socket.AF_UNIX)
 s.connect("/run/nimbus-privd.sock")
-s.sendall(b'{"id":"x1","verb":"update.status","args":{}}\n')
+s.sendall((json.dumps({"id": "x1", "verb": verb, "args": args}) + "\n").encode())
 print(s.makefile().readline())
 EOF
 chmod a+r "$WORK/client.py"
 chmod a+rx "$WORK"
 reply="$(setpriv --reuid=alice --regid=alice --init-groups -- python3 "$WORK/client.py" 2>&1 || true)"
 check "a desktop user in nimbus-control can open the socket but is refused" grep -q '"code":"denied"' <<<"$reply"
+
+STACKS=/var/lib/nimbus-control/stacks
+"${AS_SERVICE[@]}" mkdir "$STACKS/smoke"
+reply="$("${AS_SERVICE[@]}" python3 "$WORK/client.py" stack.prepare_volume \
+	'{"stack": "smoke", "path": "config", "uid": 472, "gid": 472}' 2>&1 || true)"
+check "stack.prepare_volume hands the folder to the container's uid" \
+	python3 -c 'import json,os,sys; r=json.loads(sys.argv[1]); st=os.stat(sys.argv[2]); assert r["ok"] and (st.st_uid, st.st_gid) == (472, 472)' \
+	"$reply" "$STACKS/smoke/config"
+install -o 472 -g 472 -m 0600 /dev/null "$STACKS/smoke/config/database.db"
+"${AS_SERVICE[@]}" rm -rf "$STACKS/smoke" 2>/dev/null || true
+check "the service user can't delete what a container wrote" test -f "$STACKS/smoke/config/database.db"
+reply="$("${AS_SERVICE[@]}" python3 "$WORK/client.py" stack.delete_data '{"stack": "smoke"}' 2>&1 || true)"
+check "stack.delete_data removes the whole stack folder" \
+	python3 -c 'import json,os,sys; r=json.loads(sys.argv[1]); assert r["ok"] and not os.path.exists(sys.argv[2] + "/smoke") and os.path.isdir(sys.argv[2])' \
+	"$reply" "$STACKS"
 check "privd audited the requests (and the refusal)" \
 	sh -c 'grep -q "update.status requested by pid" "$1" && grep -q "update.check by pid .*: ok" "$1" && grep -q "refused a connection from uid" "$1"' _ "$WORK/privd.log"
 

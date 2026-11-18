@@ -1,0 +1,19 @@
+{
+  "id": "demo-host",
+  "name": "Demo Host Monitor",
+  "description": "Test fixture: host networking, a read-only Docker socket and a web page that needs a secure context.",
+  "category": "System",
+  "template_version": 1,
+  "main_service": "monitor",
+  "network_mode": "host",
+  "ports": [
+    {"id": "ui", "container": 9000, "host": 9000, "description": "Web page"}
+  ],
+  "volumes": [
+    {"id": "data", "container": "/data", "default": "data"}
+  ],
+  "host_paths": [
+    {"host": "/var/run/docker.sock", "container": "/var/run/docker.sock", "read_only": true}
+  ],
+  "webui": {"port": "ui", "path": "/", "secure_context": true}
+}

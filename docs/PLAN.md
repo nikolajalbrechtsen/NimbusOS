@@ -88,12 +88,13 @@ NimbusOS/
 │
 ├── control-center/
 │   ├── backend/nimbus_control/       FastAPI: app.py, auth.py, errors.py, config.py, fonts.py, privd_client.py,
-│   │                                 system_service.py, updates_service.py; later: metrics_service.py,
-│   │                                 docker_service.py, vm_service.py, storage_service.py, shares_service.py, state.py
+│   │                                 system_service.py, updates_service.py, state.py, jobs.py; Apps: catalog.py,
+│   │                                 manifest.py, compose.py, docker_api.py, apps_service.py; later:
+│   │                                 metrics_service.py, vm_service.py, storage_service.py, shares_service.py
 │   ├── common/nimbus_common/         shared by backend and privd: validate.py, protocol.py (privd wire format);
 │   │                                 later: the smb.conf renderer, schemas
 │   ├── privd/                        nimbus-privd.py + nimbus_privd/ (server, registry, runner, audit, updates,
-│   │                                 system; later: disks, pool, samba, smbusers)
+│   │                                 system, stacks; later: disks, pool, samba, smbusers)
 │   ├── frontend/                     index.html, console.html, style.css, app.js,
 │   │                                 lib/{api,ui,icons,charts}.js,
 │   │                                 views/{dashboard,apps,vms,storage,updates,settings}.js
@@ -105,6 +106,7 @@ NimbusOS/
 │   │                                 nimbus-recycle-clean.{service,timer}, nimbus-netfix.service
 │   ├── data/                         samba drop-in, polkit action, nimbus-control.desktop (icon: nimbusos-branding's logo)
 │   └── tests/                        pytest (no network, no root; Docker/libvirt/privd faked); ui_preview.py (screenshots)
+│       ├── fixtures/catalog/                         three demo apps for the Apps tests and screenshots
 │       ├── integration/installed-smoke.sh            the installed package, run as its units would run it
 │       └── integration/samba-ucf-keeps-include.sh   CI: a ucf-managed smb.conf update keeps the include (NOTE-23)
 │
@@ -608,6 +610,47 @@ Until batch 5, the router shows a clear "could not be shown" state for a page wh
 - **What deliverable 10 must provide:** `releases.json` entries need `version`, `deb_version`, `channel`, plus `date`, `notes` and `restart_required`, which the Updates page shows.
 - **Spec settings carried to batch 4:** the spec also lists `smb encrypt = if_required` and global `vfs objects = catia fruit streams_xattr`. They interact with per-share VFS modules (recycle bin, Time Machine), so batch 4 adds them to `nimbus.conf` together with the share renderer and checks them with `testparm`.
 
+**NOTE-66 — Control Center, batch 2 of 5: Apps.** The Apps page has an Installed list, the Catalog, 1-click install and Advanced install with a Compose tab. The backend is `manifest.py`, `catalog.py`, `compose.py`, `apps_service.py`, `jobs.py`, `docker_api.py` and `state.py`, plus privd's `stacks.py`. No new lines in `debian/install` were needed: everything sits in folders batch 1 already installs.
+- **The manifest contract (for deliverable 9).** `manifest.py` defines what an app may declare:
+  - `id` (equal to its folder), `name`, `description`, `category`, `template_version` ≥ 1 and `main_service`;
+  - `network_mode` (`bridge` or `host`);
+  - `ports[]`: `id`, `container`, `host`, `protocol`, `bind` (`all` or `lan`), `fixed`;
+  - `volumes[]`: `id`, `container`, `kind` (`bind` or `named`), `default`, `share_hint`, `owner {uid, gid}`;
+  - `env[]`: `name`, `default`, `required`, `secret`, `generate` (`password`, `hex` or `base64`);
+  - `host_paths[]`, `webui {port, path, secure_context}` and `notes`.
+  - `manifest.schema.json` and `SCHEMA.md` must describe the same contract. The catalog applies the schema when `python3-jsonschema` loads it, and `parse_manifest` always. A broken app is listed on the Catalog tab; the others still work. A changed file is picked up on the next request (mtime and size), so a `nimbus-catalog` upgrade needs no restart.
+- **The deploy engine.** The template is rendered in the sandbox (NOTE-30) and sees `stack`, `env`, `ports` (port id → host port), `host_ip` and `hostname`. The engine then owns the main service's ports, volumes (plus `host_paths`), environment, restart policy and network mode, and the top-level `name:`. Template values come first, then the install settings, sorted and with `$` doubled. Sorting makes the same settings give the same file byte for byte, so a template diff shows only real changes.
+  - Named volumes stay project-scoped (`<stack>_<volume>`), so two installs of one app never share a database.
+  - A template that needs one fixed volume name (Nextcloud AIO, NOTE-29) declares it with `name:` at the top level, and the engine keeps that.
+- **1-click defaults:**
+  - **Host ports:** the first free port from the manifest's, skipping Docker's published ports, listening sockets, other apps' ports and installs still running. A `fixed` port never moves: the plan warns, and the install then stops at that field.
+  - **LAN binding:** `bind: lan` uses the default route's address (NOTE-18).
+  - **Folders:** `share_hint` uses that share's folder when it exists, else the stack folder.
+  - **Secrets:** generated (`password`: 32 URL-safe characters; `hex`: 64; `base64`: 44).
+  - **Restart policy:** `unless-stopped`.
+  - **Names:** `<app>`, then `<app>-2`, and so on.
+- **Validation.** Every error names its input (`name`, `ports.0.host`, `volumes.1.source`, `env.NAME`, `env.NAME.name`), and the Advanced form highlights that field.
+  - A host port in use names its holder and suggests the next free port.
+  - A volume source must be one of: a folder in the app's stack folder or in a share (resolved with `realpath`, so links can't lead out), a relative path inside the stack folder, or a Docker volume name.
+  - The bind rules (NOTE-30) apply to every deploy, generated or hand-edited, in every service and in both volume syntaxes.
+  - `docker compose config` must then accept the file before anything is written.
+- **Jobs.** Install, edit, start, stop, restart, update (pull and up), template update and uninstall each run as a job. Only one job runs per app (otherwise 409). The log streams over `/ws/jobs/<id>`, and finished jobs are kept for an hour.
+  - The app's record in `stacks.json` is saved as soon as its Compose file is written. If the pull then fails (no network), the app stays listed with its error and can be started again or uninstalled.
+  - A file that `docker compose config` rejects leaves nothing behind, not even an empty folder.
+- **Status.** Containers are matched to apps by the Compose project label. What the user last asked for (`desired`: running or stopped) decides what counts as an error:
+  - a container that stops while its app should run is an error, with the reason: exit code, out of memory, restarting, unhealthy, or containers missing;
+  - a container the user stopped is not.
+  - If Docker is down, every app shows "unknown" and a banner says how to start Docker; the page still works.
+- **Data and uninstall (NOTE-31).**
+  - `stack.prepare_volume` makes a folder and hands that one folder to the container's uid; it is not recursive.
+  - `stack.delete_data` deletes `/var/lib/nimbus-control/stacks/<stack>`.
+  - Both walk from a handle on the stacks folder with `O_NOFOLLOW`, and `rmtree` runs only where it is symlink-safe. A link planted in a stack, a stack that is a link, and the stacks folder swapped for a link are all refused (tested).
+  - Uninstall keeps the data folder and named volumes. "Delete data" also passes `--volumes` and asks a second time, with the name typed.
+- **Template updates (NOTE-60).** "Template update" appears when the catalog's `template_version` is newer than the app's. The diff (the installed file against the new template with the app's own settings) is shown first, with secret values masked. Nothing changes until the user applies it. If the file was edited by hand, the dialog says the template replaces those edits.
+- **Web page link:** `http://<hostname>:<port><path>`, or `http://localhost:<port>` when the app needs a secure context (NOTE-29).
+- **Live logs:** `docker compose logs --follow --tail 200`, stopped as soon as the window closes, not at the next log line.
+- **What batch 4 must provide:** `shares.json` entries need `name` and `path`. Other fields are ignored here. `share_hint` matches `name`.
+
 ### Found by the Trixie archive check (deliverable 3)
 
 **NOTE-51 — `wsdd2` instead of `wsdd`.** Trixie has no `wsdd` package (§7). `wsdd2` (1.8.7, main) serves the same purpose: it makes the machine show up under Network in Windows Explorer through WS-Discovery. The storage list, the `nimbus-control` Depends, the services table, the alert rules and the Settings page all use `wsdd2` and its unit, `wsdd2.service`.
@@ -826,6 +869,36 @@ How to read it: the NimbusOS and Docker repositories offer `bash` 99.0 and 98.0,
 - **Package:** `nimbus-control` builds and is lintian-clean (same two overrides). The maintainer-script test still passes 82 of 82 with the new contents.
 - **Screenshots** (`ui_preview.py`, headless Chromium with Debian's fonts) were looked at: the Updates page at 1400 px and full height, the 800 px layout (tab strip, stacked panels), and the signed-out page. Three things were fixed after looking: extra space above the facts list, radio-card text drifting apart in equal-height cards, and a meaningless "12:00 AM" on date-only release dates.
 
+**Deliverable 8, batch 2** (Apps, 2026-11-18, `dev-shell.sh` clone mode, NOTE-66):
+- **pytest, 222 passed** (139 new). The new tests use a fixture catalog of three demo apps (`control-center/tests/fixtures/catalog`), a fake Docker SDK and a fake `docker` program that logs its arguments.
+  - `test_manifest` (32): defaults filled in; 26 kinds of broken manifest refused with the app and field named; the catalog skips links and lists broken apps, picks up changed and removed apps without a restart, and applies a JSON schema.
+  - `test_compose` (35): YAML injection through values impossible; the sandbox blocks Python internals; what the engine sets on the main service; project-scoped and pinned volume names; 17 allowed and refused bind mounts (`/etc`, `~`, `..`, a link out of the stack folder, a look-alike share path); `docker compose config` errors reported, and no folder left behind.
+  - `test_apps` (62): the whole API through the real app. Covered: public icons and nothing else public; 1-click plans (busy ports, LAN binding, fixed port 53, `share_hint`, secrets, unique names); 22 invalid inputs refused with their field before anything runs; install, every action, edit (settings and a hand-edited file), the template update with its masked diff, and uninstall with and without data, each with the exact `docker compose` argument lists; a failed pull keeps the app listed; a rejected file leaves nothing; status for 12 container situations; live logs; one job per app; plain job errors.
+  - `test_privd` (+10): the stack verbs on a real socket, as root, so the chown to uid 472 is real; bad arguments; links refused in all three places.
+- **Against the real Docker Compose** (`docker-ce-cli` and `docker-compose-plugin` from Docker's repository, verified with the pinned key; `docker compose version` v5.8.0): four tests that are skipped where Compose isn't installed passed. Compose accepts the engine's output for all three fixture apps: LAN-bound UDP 53, an external network, a named volume, host networking with the read-only Docker socket. It reads every value back exactly as typed, including `$`, spaces, `:`, `#`, quotes and a newline. Found here: Compose's `config` output escapes `$` as `$$` again.
+- **`installed-smoke.sh`, 20 passed** (6 new). The new checks:
+  - the Apps page is served;
+  - `/api/apps` answers "Docker isn't running" without failing;
+  - the catalog is empty without `nimbus-catalog`;
+  - as the service user, through privd's socket, `stack.prepare_volume` hands `/var/lib/nimbus-control/stacks/smoke/config` to 472:472;
+  - the service user itself can't delete a file a container wrote there;
+  - `stack.delete_data` removes the whole folder.
+- **Package:** `nimbus-control` builds and is lintian-clean. The maintainer-script test passes 82 of 82. Every frontend module parses (`node --check`). `check-file-modes`: 232 files OK.
+- **Screenshots looked at:** the Installed list (running, starting, stopped, error with its reason, template update) at 1400 and 800 px, the Catalog, Advanced install, its Compose tab, and the template diff. Fixed after looking:
+  - the Settings panel stayed visible under the Compose tab: `display: grid` beat the `hidden` attribute, so `[hidden]` now always wins;
+  - app names wrapped mid-word;
+  - category tags stretched across the card;
+  - the folder path was cut off;
+  - the Restart field sat lower than Network;
+  - action buttons ran off the table at 800 px;
+  - secret values showed in the template diff;
+  - an app without an icon showed an empty square, and now shows its initial;
+  - animations were caught half-way in the screenshots, which now use reduced motion.
+- **Found by the tests:**
+  - the state file stores settings sorted, so a rebuilt file listed variables in another order and the template diff showed changes that weren't there;
+  - a bad name in a plan request gave 500 instead of 422; `ValidationError` now maps to 422 everywhere;
+  - a broken catalog JSON file's error didn't name the app.
+
 **os-release, unattended-upgrades, Docker and Calamares** (`os-identity.test.sh`, NimbusOS os-release installed). Excerpts:
 
 ```
@@ -880,7 +953,7 @@ Facts confirmed by reading live-build `1:20250505+deb13u1`'s own scripts and Deb
 | 5 | Debian packaging (7 packages), in three parts | **Part 1:** `packages/{nimbusos-archive-keyring,nimbusos-docker-keyring,nimbusos-release,nimbusos-desktop}/**` (os-release, source, pinning with the `apt-cache policy` proof, unattended-upgrades drop-ins, `nimbus-update`, timers, Flathub setup, tests), plus `build-debs.sh` token rendering, mode normalization and `--only`. **Part 2 (done):** `packages/nimbusos-branding/**` (all themes and art, CC-BY-SA-4.0 text from SPDX, install test). **Part 3 (done):** `packages/{nimbus-control,nimbus-catalog}/{debian,tests}/**`, plus the parts of `control-center/` the packaging runs: `systemd/*` (all units), `data/samba/nimbus.conf`, `bin/nimbus-migrate`, `migrations/0001_initial.py` and `tests/test_migrate.py` (NOTE-58 to NOTE-61) |
 | 6 | Live hooks (done) | `build/config/hooks/live/{0100,0200,0300,0900}-*.hook.chroot`, `nimbus_check_image_initrd` in `build/lib/common.sh` (instead of a hook 9990, NOTE-62), `tools/tests/{hooks,image-initrd-check}.test.sh` |
 | 7 | Live-only files and boot menus (done) | `build/config/includes.chroot_after_packages/**`, `build/config/bootloaders/**`, hook `0400-live-manifest`, the verify hook's installer checks, `--bootappend-live-failsafe` and `nimbus_prepare_grub_theme` in `build/lib/common.sh`, `tools/tests/{live-files,bootloaders}.test.sh` (NOTE-63, NOTE-64) |
-| 8 | Nimbus Control Center, in five batches (NOTE-65) | **Batch 1 (done):** backend core (app, auth, errors, config, fonts, privd client, system, updates), `nimbus_common` (validate, protocol), privd (server, registry, runner, audit, updates, system), launcher and Grant access, desktop file and polkit action, the whole design system (`style.css`, `lib/{api,ui,icons}.js`, `app.js`), `views/updates.js`, tests. **Batch 2:** Apps. **Batch 3:** VMs. **Batch 4:** Storage, Shares, Settings. **Batch 5:** Dashboard and metrics. Each batch adds its lines to `packages/nimbus-control/debian/install` (NOTE-61) |
+| 8 | Nimbus Control Center, in five batches (NOTE-65) | **Batch 1 (done):** backend core (app, auth, errors, config, fonts, privd client, system, updates), `nimbus_common` (validate, protocol), privd (server, registry, runner, audit, updates, system), launcher and Grant access, desktop file and polkit action, the whole design system (`style.css`, `lib/{api,ui,icons}.js`, `app.js`), `views/updates.js`, tests. **Batch 2 (done, NOTE-66):** `backend/nimbus_control/{manifest,catalog,compose,apps_service,jobs,docker_api,state}.py`, privd `stacks.py`, the validators for apps, form components in `lib/ui.js`, `views/apps.js`, the fixture catalog and `test_{manifest,compose,apps}.py`, privd stack tests, Apps checks in `installed-smoke.sh`, Apps scenes in `ui_preview.py`. **Batch 3:** VMs. **Batch 4:** Storage, Shares, Settings. **Batch 5:** Dashboard and metrics. Each batch adds its lines to `packages/nimbus-control/debian/install` (NOTE-61) |
 | 9 | Catalog | `catalog/SCHEMA.md`, `catalog/manifest.schema.json` (with `template_version`, NOTE-60), 10 apps |
 | 10 | CI/CD and docs (CI also runs `tools/tests/*.test.sh` and `tools/fetch-docker-key.sh --verify-local` / `--check`) | `.github/workflows/*`, `.github/dependabot.yml`, `apt/conf/*`, `tools/{publish-apt.sh,releases-json.py,split-iso.sh,pin-actions.sh}`, `control-center/tests/integration/samba-ucf-keeps-include.sh`, `README.md`, `LICENSE`, `LICENSES/*`, `.shellcheckrc`, `ruff.toml`, `docs/{RELEASING,SIGNING}.md`, `docs/release-notes/v0.1.0.md` |
 | 11 | Testing (the smoke test includes `systemctl --user show-environment \| grep XDG_CONFIG_DIRS` and kinfocenter's About page after a graphical login, NOTE-55) | `docs/TESTING.md`, `tools/qemu-test.sh` |

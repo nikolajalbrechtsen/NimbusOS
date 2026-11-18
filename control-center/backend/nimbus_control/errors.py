@@ -2,7 +2,8 @@
 # nimbus_control/errors.py: API errors the user can act on
 # =============================================================================
 # What: ApiError(status, message, field) and the handlers that turn it, a
-#       privd error and a request-validation error into one JSON shape:
+#       privd error, a ValidationError from nimbus_common.validate (422) and
+#       a request-validation error into one JSON shape:
 #         {"message": "<what went wrong and how to fix it>", "field": "<input>"}
 #       privd error codes map to HTTP statuses: invalid_argument 422,
 #       busy 409, failed 502, unavailable 503, anything else 500.
@@ -13,6 +14,8 @@
 from fastapi import Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+
+from nimbus_common.validate import ValidationError
 
 from .privd_client import PrivdError
 
@@ -39,6 +42,10 @@ def install(app):
     @app.exception_handler(ApiError)
     async def api_error(request: Request, exc: ApiError):
         return JSONResponse(_body(exc.message, exc.field), status_code=exc.status)
+
+    @app.exception_handler(ValidationError)
+    async def validation_failed(request: Request, exc: ValidationError):
+        return JSONResponse(_body(exc.message, exc.field), status_code=422)
 
     @app.exception_handler(PrivdError)
     async def privd_error(request: Request, exc: PrivdError):
