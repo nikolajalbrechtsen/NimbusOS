@@ -1,0 +1,119 @@
+#!/usr/bin/python3
+# =============================================================================
+# nimbus-control-open: open the Nimbus Control Center (the app menu launcher)
+# =============================================================================
+# What: runs as the desktop user:
+#         1. if this session isn't in the nimbus-control group: explains why,
+#            and offers "Grant access" (pkexec nimbus-grant-access, which asks
+#            for an administrator password); afterwards the user logs out and
+#            back in;
+#         2. reads the per-boot token (/run/nimbus-control/token, readable by
+#            the group) and trades it with the backend for a one-time launch
+#            code (valid once, for 30 seconds);
+#         3. replaces itself with Chromium in app mode on
+#            http://127.0.0.1:7777/?launch=<code> (window class NimbusControl,
+#            its own profile in ~/.local/share/nimbus-control/chromium).
+#       Problems are shown with kdialog, not just printed.
+# Why:  docs/PLAN.md NOTE-14 (the token is never on a command line, where
+#       every local user could read it in /proc) and NOTE-09.
+# =============================================================================
+import grp
+import json
+import os
+import subprocess
+import sys
+import urllib.error
+import urllib.request
+
+BASE = "http://127.0.0.1:7777"
+TOKEN_FILE = "/run/nimbus-control/token"
+GROUP = "nimbus-control"
+KDIALOG = "/usr/bin/kdialog"
+PKEXEC = "/usr/bin/pkexec"
+CHROMIUM = "/usr/bin/chromium"
+GRANT = "/usr/lib/nimbus-control/bin/nimbus-grant-access"
+TITLE = "Nimbus Control Center"
+
+
+def show(kind, text):
+    """kind: msgbox, sorry or error."""
+    if os.access(KDIALOG, os.X_OK):
+        subprocess.run([KDIALOG, "--title", TITLE, f"--{kind}", text], check=False)
+    else:
+        print(f"{TITLE}: {text}", file=sys.stderr)
+
+
+def ask(text, yes_label):
+    if not os.access(KDIALOG, os.X_OK):
+        print(f"{TITLE}: {text}", file=sys.stderr)
+        return False
+    return subprocess.run([KDIALOG, "--title", TITLE, "--yes-label", yes_label, "--no-label", "Cancel",
+                           "--yesno", text], check=False).returncode == 0
+
+
+def session_has_access():
+    try:
+        gid = grp.getgrnam(GROUP).gr_gid
+    except KeyError:
+        show("error", "The nimbus-control group is missing. Reinstall the nimbus-control package.")
+        sys.exit(1)
+    return gid in os.getgroups() or gid == os.getgid()
+
+
+def offer_access():
+    user = os.environ.get("USER") or ""
+    if user and user in grp.getgrnam(GROUP).gr_mem:
+        show("msgbox", "Your account already has access, but this session started before it was given.\n\n"
+                       "Log out and back in, then open the Control Center again.")
+        return
+    if not ask("Your account can't use the Control Center yet. It needs to be in the groups that "
+               "manage apps, virtual machines and storage.\n\nGrant access? An administrator "
+               "password is needed.", "Grant access"):
+        return
+    result = subprocess.run([PKEXEC, GRANT], check=False)
+    if result.returncode == 0:
+        show("msgbox", "Access granted. Log out and back in, then open the Control Center again.")
+    elif result.returncode in (126, 127):
+        show("sorry", "Access was not granted (the administrator password was not given).")
+    else:
+        show("error", "Access could not be granted. See 'journalctl -t nimbus-grant-access'.")
+
+
+def launch_code():
+    try:
+        with open(TOKEN_FILE, encoding="ascii") as f:
+            token = f.read().strip()
+    except FileNotFoundError:
+        show("error", "The Control Center service is not running.\n\n"
+                      "Start it with: sudo systemctl start nimbus-control")
+        sys.exit(1)
+    except PermissionError:
+        show("error", "This session can't read the Control Center's access token. Log out and back in.")
+        sys.exit(1)
+    request = urllib.request.Request(f"{BASE}/api/session/launch-code", data=b"", method="POST",
+                                     headers={"Authorization": f"Bearer {token}"})
+    try:
+        with urllib.request.urlopen(request, timeout=10) as response:
+            return json.load(response)["code"]
+    except (urllib.error.URLError, OSError, KeyError, ValueError) as exc:
+        show("error", "The Control Center service is not responding.\n\n"
+                      f"Check it with: systemctl status nimbus-control\n({exc})")
+        sys.exit(1)
+
+
+def main():
+    if not session_has_access():
+        offer_access()
+        return 0
+    code = launch_code()
+    data_home = os.environ.get("XDG_DATA_HOME") or os.path.expanduser("~/.local/share")
+    profile = os.path.join(data_home, "nimbus-control", "chromium")
+    os.makedirs(profile, mode=0o700, exist_ok=True)
+    os.execv(CHROMIUM, [CHROMIUM, f"--app={BASE}/?launch={code}", "--class=NimbusControl",
+                        f"--user-data-dir={profile}", "--no-first-run", "--no-default-browser-check",
+                        "--disable-features=Translate"])
+    return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

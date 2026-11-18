@@ -87,11 +87,13 @@ NimbusOS/
 │   └── nimbusos-desktop/             metapackage; Depends generated from build/config/package-lists/
 │
 ├── control-center/
-│   ├── backend/nimbus_control/       FastAPI: app.py, auth.py, metrics_service.py, docker_service.py,
-│   │                                 vm_service.py, storage_service.py, shares_service.py,
-│   │                                 updates_service.py, privd_client.py, state.py
-│   ├── common/nimbus_common/         shared by backend and privd: validators, smb.conf renderer, schemas
-│   ├── privd/                        nimbus-privd.py + nimbus_privd/ (disks, pool, samba, smbusers, updates, audit)
+│   ├── backend/nimbus_control/       FastAPI: app.py, auth.py, errors.py, config.py, fonts.py, privd_client.py,
+│   │                                 system_service.py, updates_service.py; later: metrics_service.py,
+│   │                                 docker_service.py, vm_service.py, storage_service.py, shares_service.py, state.py
+│   ├── common/nimbus_common/         shared by backend and privd: validate.py, protocol.py (privd wire format);
+│   │                                 later: the smb.conf renderer, schemas
+│   ├── privd/                        nimbus-privd.py + nimbus_privd/ (server, registry, runner, audit, updates,
+│   │                                 system; later: disks, pool, samba, smbusers)
 │   ├── frontend/                     index.html, console.html, style.css, app.js,
 │   │                                 lib/{api,ui,icons,charts}.js,
 │   │                                 views/{dashboard,apps,vms,storage,updates,settings}.js
@@ -101,8 +103,9 @@ NimbusOS/
 │   ├── systemd/                      nimbus-control.service, nimbus-privd.{socket,service},
 │   │                                 nimbus-websockify.service, nimbus-snapraid-sync.{service,timer},
 │   │                                 nimbus-recycle-clean.{service,timer}, nimbus-netfix.service
-│   ├── data/                         samba drop-in, polkit action, nimbus-control.desktop, icons
-│   └── tests/                        pytest; no network, no root; Docker/libvirt/privd are faked
+│   ├── data/                         samba drop-in, polkit action, nimbus-control.desktop (icon: nimbusos-branding's logo)
+│   └── tests/                        pytest (no network, no root; Docker/libvirt/privd faked); ui_preview.py (screenshots)
+│       ├── integration/installed-smoke.sh            the installed package, run as its units would run it
 │       └── integration/samba-ucf-keeps-include.sh   CI: a ucf-managed smb.conf update keeps the include (NOTE-23)
 │
 ├── catalog/
@@ -222,7 +225,7 @@ Rules applied to all seven: lintian-clean or a justified override; idempotent, u
 
 | Path | Owner / mode | What |
 |---|---|---|
-| `/usr/lib/nimbus-control/` | root | backend, `nimbus_common`, privd (`nimbus-privd.py`), `www/`, `bin/`, `migrations/` |
+| `/usr/lib/nimbus-control/` | root | `python/` (`nimbus_control`, `nimbus_common`, `nimbus_privd`, byte-compiled by dh_python3), `privd/nimbus-privd.py`, `www/` (the frontend), `bin/`, `migrations/` |
 | `/usr/share/nimbus-control/catalog/` | root | catalog (`nimbus-catalog`) |
 | `/var/lib/nimbus-control/` | `nimbus-control` 0750 (tmpfiles.d) | state files at the top (`schema_version`, `settings.json`, `shares.json`, `stacks.json`); `backups/`, the last 5 copies made before a migration; `stacks/<stack>/`, app data, which migrations never touch and purge keeps (NOTE-58, NOTE-59) |
 | `/var/lib/nimbus-vms/{isos,images}/` | isos: `root:nimbus-smb` 2775, like a share, because an `isos` share may be bind-mounted onto it; images: root 0711, libvirt pool `nimbus-images` | ISO library (NOTE-27), qcow2 disks |
@@ -576,6 +579,35 @@ The `*.list.binary` files are never read: they only fill the ISO's package pool,
 - **Splash:** `splash.svg` uses the logo and palette, and live-build's `@VERSION@` token is filled from os-release. live-build renders it at 640×480 for ISOLINUX and 800×600 for GRUB's fallback. The title stays above text row 12, where the ISOLINUX menu starts.
 - **Theme preparation:** it moved from `build.sh` into `nimbus_prepare_grub_theme` (`build/lib/common.sh`), so the test runs exactly the build's code.
 
+### Found while building the Control Center (deliverable 8)
+
+**NOTE-65 — Control Center, batch 1 of 5: the foundation and the Updates page.** Deliverable 8 comes in five vertical batches, each complete and tested:
+1. this foundation plus Updates;
+2. Apps (Docker);
+3. Virtual machines;
+4. Storage, Shares and Settings;
+5. Dashboard and metrics, which need the other four.
+
+Until batch 5, the router shows a clear "could not be shown" state for a page whose module isn't there yet. That is its normal error handling, not a stand-in page.
+- **Install layout:** Python packages go in `/usr/lib/nimbus-control/python/`, put on the module path by the two entry points (`bin/nimbus-control-server`, `privd/nimbus-privd.py`). The frontend goes in `www/`. `nimbus-control` now Depends on `nimbusos-branding` (its logo is the window's logo, the launcher's icon and the favicon) and on `kdialog` (the launcher's messages).
+- **privd protocol** (`nimbus_common/protocol.py`): one request per connection, as JSON lines: `{id, verb, args}`, then any number of `{event: "log"}` lines, then `{ok, result}` or `{ok: false, error: {code, message, field}}`.
+  - Error codes: `invalid_request`, `unknown_verb`, `invalid_argument`, `denied`, `busy`, `failed`, `internal`.
+  - The backend maps them to HTTP 422, 409, 502 and 503 (`unavailable`, the socket can't be reached), else 500, with a message the user can act on.
+- **privd checks:** `SO_PEERCRED` must show the `nimbus-control` uid, so a desktop user in the group can open the socket but is refused (tested on the installed package). Then come the verb allowlist (`registry.py`) and per-argument validators from `nimbus_common.validate`, which reject undeclared arguments. A verb's lock makes a second caller "busy". Commands are absolute-path argument lists in a minimal environment.
+- **Audit:** one journal entry per request and outcome, with structured `NIMBUS_*` fields and secrets as `***`. The same line also goes to stderr unless stderr already is the journal (`JOURNAL_STREAM`): without journald, `journal.send()` drops entries silently, which the installed-system test caught.
+- **Updates through nimbus-update:** `status`, `check`, `channel`, `policy` and `history` call `nimbus-update --json …` and return its document even when it exits non-zero. `check` exits 1 when a repository failed, and the document carries the classified error. The installed-system test found this: a first version turned it into a generic "failed", hiding the fix the user needs.
+- **Installing updates:** `install` starts `nimbus-update install` as the transient unit `nimbus-update-<job>.service` (`systemd-run`, `RemainAfterExit=yes`) and returns the job. `follow` streams that unit's journal until it has finished, then reports the exit status. The page reconnects (and shows the whole log again) if the backend itself restarts during an upgrade (NOTE-35).
+- **Authentication:**
+  - The token is 43 url-safe characters in `/run/nimbus-control/token` (0640, group `nimbus-control`), kept across service restarts and new every boot.
+  - Launch codes: 30 seconds, single use, at most 16 pending.
+  - WebSockets offer the subprotocols `nimbus.v1` and `nimbus.token.<token>`, and the server echoes `nimbus.v1`.
+  - The CSP is `default-src 'self'` with explicit `ws://127.0.0.1:7777` and `ws://localhost:7777`, `frame-ancestors 'self'` and `object-src 'none'`.
+  - No OpenAPI or docs pages are served.
+- **Grant access** (`nimbus-grant-access`, polkit `auth_admin`): adds only the user who ran pkexec (`PKEXEC_UID`), and only a regular account (uid 1000 and up), to `NIMBUS_USER_EXTRA_GROUPS`. No user name is ever taken from the command line.
+- **Fonts:** static Inter (400, 500, 600, 700) and JetBrains Mono (400, 500), found through `dpkg-query -L` (NOTE-13). The spec's 650-weight headings render with the 700 face by CSS weight matching, since Debian ships no variable Inter.
+- **What deliverable 10 must provide:** `releases.json` entries need `version`, `deb_version`, `channel`, plus `date`, `notes` and `restart_required`, which the Updates page shows.
+- **Spec settings carried to batch 4:** the spec also lists `smb encrypt = if_required` and global `vfs objects = catia fruit streams_xattr`. They interact with per-share VFS modules (recycle bin, Time Machine), so batch 4 adds them to `nimbus.conf` together with the share renderer and checks them with `testparm`.
+
 ### Found by the Trixie archive check (deliverable 3)
 
 **NOTE-51 — `wsdd2` instead of `wsdd`.** Trixie has no `wsdd` package (§7). `wsdd2` (1.8.7, main) serves the same purpose: it makes the machine show up under Network in Windows Explorer through WS-Discovery. The storage list, the `nimbus-control` Depends, the services table, the alert rules and the Settings page all use `wsdd2` and its unit, `wsdd2.service`.
@@ -777,6 +809,23 @@ How to read it: the NimbusOS and Docker repositories offer `bash` 99.0 and 98.0,
   - my own comments quoting "Live system" tripped a check, which now skips comments;
   - `apt-cache policy` and `apt-get indextargets` leave out suite/component pairs whose index is empty, so the test checks what apt fetches (`--print-uris`).
 
+**Deliverable 8, batch 1** (foundation and Updates page, 2026-11-18, `dev-shell.sh` clone mode):
+- **pytest, 83 passed.** It covers:
+  - validators: names, ports, and `path_under` with `..`, a symlink escape and a look-alike prefix;
+  - the privd server on a real socket: another uid refused; unknown verb, broken line, undeclared, missing and invalid arguments rejected with the field named; secrets redacted in the audit; streaming; busy locks; clean failures;
+  - the update verbs: exact argument lists with no shell, `systemd-run` for install, journal follow, exit-1 documents kept;
+  - the backend: the 0640 token file reused; Host and Origin checks; `/api` needing the token; security headers; launch codes (once, 30 s); WebSocket refusals for the right reason; the Updates API; privd errors mapped to statuses; the sidebar count.
+- **The 10 earlier `test_migrate` cases still pass.** Every frontend module parses (`node --check`).
+- **`control-center/tests/integration/installed-smoke.sh`, 14 passed.** It installs `nimbus-control`, `nimbusos-release`, the keyring and branding, starts privd through `systemd-socket-activate` (socket 0660 `root:nimbus-control`) and the backend as `nimbus-control`. Checked:
+  - the token file mode; the page and CSP; fonts from Debian's packages; the logo;
+  - 401 without the token, 403 for a foreign Host, the launch code working once;
+  - the installed os-release;
+  - the real `nimbus-update` status through privd, and "Check now" reporting `('nimbusos', 'unreachable')` (the repository isn't published yet) as an error;
+  - a desktop user in `nimbus-control` refused by privd;
+  - the audit trail.
+- **Package:** `nimbus-control` builds and is lintian-clean (same two overrides). The maintainer-script test still passes 82 of 82 with the new contents.
+- **Screenshots** (`ui_preview.py`, headless Chromium with Debian's fonts) were looked at: the Updates page at 1400 px and full height, the 800 px layout (tab strip, stacked panels), and the signed-out page. Three things were fixed after looking: extra space above the facts list, radio-card text drifting apart in equal-height cards, and a meaningless "12:00 AM" on date-only release dates.
+
 **os-release, unattended-upgrades, Docker and Calamares** (`os-identity.test.sh`, NimbusOS os-release installed). Excerpts:
 
 ```
@@ -831,7 +880,7 @@ Facts confirmed by reading live-build `1:20250505+deb13u1`'s own scripts and Deb
 | 5 | Debian packaging (7 packages), in three parts | **Part 1:** `packages/{nimbusos-archive-keyring,nimbusos-docker-keyring,nimbusos-release,nimbusos-desktop}/**` (os-release, source, pinning with the `apt-cache policy` proof, unattended-upgrades drop-ins, `nimbus-update`, timers, Flathub setup, tests), plus `build-debs.sh` token rendering, mode normalization and `--only`. **Part 2 (done):** `packages/nimbusos-branding/**` (all themes and art, CC-BY-SA-4.0 text from SPDX, install test). **Part 3 (done):** `packages/{nimbus-control,nimbus-catalog}/{debian,tests}/**`, plus the parts of `control-center/` the packaging runs: `systemd/*` (all units), `data/samba/nimbus.conf`, `bin/nimbus-migrate`, `migrations/0001_initial.py` and `tests/test_migrate.py` (NOTE-58 to NOTE-61) |
 | 6 | Live hooks (done) | `build/config/hooks/live/{0100,0200,0300,0900}-*.hook.chroot`, `nimbus_check_image_initrd` in `build/lib/common.sh` (instead of a hook 9990, NOTE-62), `tools/tests/{hooks,image-initrd-check}.test.sh` |
 | 7 | Live-only files and boot menus (done) | `build/config/includes.chroot_after_packages/**`, `build/config/bootloaders/**`, hook `0400-live-manifest`, the verify hook's installer checks, `--bootappend-live-failsafe` and `nimbus_prepare_grub_theme` in `build/lib/common.sh`, `tools/tests/{live-files,bootloaders}.test.sh` (NOTE-63, NOTE-64) |
-| 8 | Nimbus Control Center | `control-center/**` (backend, common, privd, frontend, the remaining bin programs, data, tests), in several batches, each adding its lines to `packages/nimbus-control/debian/install` (NOTE-61) |
+| 8 | Nimbus Control Center, in five batches (NOTE-65) | **Batch 1 (done):** backend core (app, auth, errors, config, fonts, privd client, system, updates), `nimbus_common` (validate, protocol), privd (server, registry, runner, audit, updates, system), launcher and Grant access, desktop file and polkit action, the whole design system (`style.css`, `lib/{api,ui,icons}.js`, `app.js`), `views/updates.js`, tests. **Batch 2:** Apps. **Batch 3:** VMs. **Batch 4:** Storage, Shares, Settings. **Batch 5:** Dashboard and metrics. Each batch adds its lines to `packages/nimbus-control/debian/install` (NOTE-61) |
 | 9 | Catalog | `catalog/SCHEMA.md`, `catalog/manifest.schema.json` (with `template_version`, NOTE-60), 10 apps |
 | 10 | CI/CD and docs (CI also runs `tools/tests/*.test.sh` and `tools/fetch-docker-key.sh --verify-local` / `--check`) | `.github/workflows/*`, `.github/dependabot.yml`, `apt/conf/*`, `tools/{publish-apt.sh,releases-json.py,split-iso.sh,pin-actions.sh}`, `control-center/tests/integration/samba-ucf-keeps-include.sh`, `README.md`, `LICENSE`, `LICENSES/*`, `.shellcheckrc`, `ruff.toml`, `docs/{RELEASING,SIGNING}.md`, `docs/release-notes/v0.1.0.md` |
 | 11 | Testing (the smoke test includes `systemctl --user show-environment \| grep XDG_CONFIG_DIRS` and kinfocenter's About page after a graphical login, NOTE-55) | `docs/TESTING.md`, `tools/qemu-test.sh` |
@@ -856,3 +905,4 @@ Facts confirmed by reading live-build `1:20250505+deb13u1`'s own scripts and Deb
    - each app manifest has its own `template_version` (NOTE-60).
 10. **No hook 9990** (deliverable 6). live-build already regenerates the initramfs after all hooks, so `build.sh` checks that the ISO's initramfs carries the NimbusOS boot splash instead (NOTE-62).
 11. **Installer minimums** (deliverable 7): 32 GB of disk and 4 GB of memory in Calamares' welcome check. This is a policy choice; deliverable 11 checks it against the installed size (NOTE-63).
+12. **Control Center in five batches** (deliverable 8): the foundation plus Updates first, then Apps, VMs, Storage & Shares with Settings, and the Dashboard last because it shows all of them (NOTE-65).

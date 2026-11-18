@@ -1,0 +1,22 @@
+#!/usr/bin/python3
+# =============================================================================
+# nimbus-control-server: run the Control Center backend (nimbus-control.service)
+# =============================================================================
+# What: serves nimbus_control.app on 127.0.0.1:7777 with uvicorn, as the
+#       nimbus-control user (the unit's User=). No proxy headers are trusted
+#       and no server header is sent.
+# Why:  docs/PLAN.md §4.1. The service's ExecStartPre (nimbus-migrate) has
+#       already brought the state to the current schema.
+# =============================================================================
+import sys
+
+sys.path.insert(0, "/usr/lib/nimbus-control/python")
+
+import uvicorn  # noqa: E402
+
+from nimbus_control.app import create_app  # noqa: E402
+from nimbus_control.config import Settings  # noqa: E402
+
+settings = Settings.from_env()
+uvicorn.run(create_app(settings), host=settings.host, port=settings.port, log_level="info",
+            proxy_headers=False, server_header=False, ws="websockets", access_log=False)

@@ -55,7 +55,9 @@ Depends: ${misc:Depends},
  e2fsprogs,
  iptables,
  pkexec,
- chromium
+ kdialog,
+ chromium,
+ nimbusos-branding
 Recommends: snapraid
 Description: Nimbus Control Center: apps, VMs and storage in one window
  The local web app of NimbusOS, served on 127.0.0.1:7777 and opened as its

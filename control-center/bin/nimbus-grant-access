@@ -1,0 +1,61 @@
+#!/usr/bin/python3
+# =============================================================================
+# nimbus-grant-access: give the calling desktop user Control Center access
+# =============================================================================
+# What: started through pkexec (polkit action org.nimbusos.control.grant-access,
+#       administrator password). Adds the user who ran pkexec (PKEXEC_UID,
+#       never a name passed on the command line) to the groups every NimbusOS
+#       desktop user has: @NIMBUS_USER_EXTRA_GROUPS@. Only regular accounts
+#       (uid 1000 and up) qualify. Logs to the journal.
+# Why:  docs/PLAN.md NOTE-09: Plasma's user settings create accounts with
+#       useradd, which ignores adduser.conf's EXTRA_GROUPS.
+# =============================================================================
+import grp
+import os
+import pwd
+import subprocess
+import sys
+
+GROUPS = "@NIMBUS_USER_EXTRA_GROUPS@".split()
+USERMOD = "/usr/sbin/usermod"
+LOGGER = "/usr/bin/logger"
+
+
+def log(text):
+    subprocess.run([LOGGER, "-t", "nimbus-grant-access", text], check=False)
+    print(text)
+
+
+def main():
+    if os.geteuid() != 0:
+        print("nimbus-grant-access: run it through pkexec.", file=sys.stderr)
+        return 2
+    raw = os.environ.get("PKEXEC_UID", "")
+    if not raw.isdigit():
+        print("nimbus-grant-access: only pkexec may start this (PKEXEC_UID is missing).", file=sys.stderr)
+        return 2
+    try:
+        user = pwd.getpwuid(int(raw))
+    except KeyError:
+        print(f"nimbus-grant-access: no user with uid {raw}.", file=sys.stderr)
+        return 2
+    if user.pw_uid < 1000 or user.pw_uid == 65534:
+        print(f"nimbus-grant-access: {user.pw_name} is a system account.", file=sys.stderr)
+        return 2
+    groups = [g for g in GROUPS if _exists(g)]
+    missing = sorted(set(GROUPS) - set(groups))
+    subprocess.run([USERMOD, "--append", "--groups", ",".join(groups), user.pw_name], check=True)
+    log(f"added {user.pw_name} to {', '.join(groups)}" + (f" (missing groups: {', '.join(missing)})" if missing else ""))
+    return 0
+
+
+def _exists(group):
+    try:
+        grp.getgrnam(group)
+        return True
+    except KeyError:
+        return False
+
+
+if __name__ == "__main__":
+    sys.exit(main())

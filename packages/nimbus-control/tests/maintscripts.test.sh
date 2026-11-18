@@ -71,7 +71,7 @@ SVC_RUN=(setpriv --reuid=nimbus-control --regid=nimbus-control --init-groups --)
 
 # Dependencies too large for a test, or only in Docker's repository; they
 # are replaced by empty stand-in packages after the resolvability check.
-STAND_INS="docker-ce docker-ce-cli docker-compose-plugin chromium qemu-system-x86 ovmf swtpm-tools"
+STAND_INS="docker-ce docker-ce-cli docker-compose-plugin chromium qemu-system-x86 ovmf swtpm-tools kdialog nimbusos-branding"
 
 # --- helpers -------------------------------------------------------------------
 stand_in() {   # stand_in NAME: build and install an empty package NAME
@@ -131,8 +131,11 @@ gpg --batch --yes --dearmor -o "$NIMBUS_DOCKER_KEYRING_PATH" "$ROOT/$NIMBUS_DOCK
 cp "$ROOT/build/config/archives/docker.list.binary" /etc/apt/sources.list.d/docker.list
 nimbus_render_tokens /etc/apt/sources.list.d/docker.list
 apt-get update -q >/dev/null
-check "all Depends and Recommends resolve in trixie + Docker's repository" \
-	apt-get install -s -y --install-recommends "$deb"
+# nimbusos-branding comes from NimbusOS itself: offer the built one.
+branding_deb="$(find "$DEBS" -maxdepth 1 -name 'nimbusos-branding_*.deb' -print -quit)"
+[[ -n "$branding_deb" ]] || { echo "maintscripts.test: no nimbusos-branding .deb in $DEBS (a Depends of nimbus-control)" >&2; exit 2; }
+check "all Depends and Recommends resolve in trixie + Docker's repository (+ nimbusos-branding)" \
+	apt-get install -s -y --install-recommends "$deb" "$branding_deb"
 rm -f /etc/apt/sources.list.d/docker.list
 apt-get update -q >/dev/null
 

@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- org.nimbusos.control.grant-access: "Grant access" in the Control Center
+     launcher. Lets an administrator add the calling desktop user to the
+     NimbusOS desktop groups (nimbus-grant-access, docs/PLAN.md NOTE-09).
+     Always asks for an administrator password; never for inactive or
+     remote sessions. -->
+<!DOCTYPE policyconfig PUBLIC "-//freedesktop//DTD PolicyKit Policy Configuration 1.0//EN"
+ "http://www.freedesktop.org/standards/PolicyKit/1/policyconfig.dtd">
+<policyconfig>
+  <vendor>NimbusOS</vendor>
+  <vendor_url>@NIMBUS_HOME_URL@</vendor_url>
+  <action id="org.nimbusos.control.grant-access">
+    <description>Give your account access to the Nimbus Control Center</description>
+    <message>Authentication is required to let this account manage apps, virtual machines and storage</message>
+    <icon_name>@NIMBUS_ID@</icon_name>
+    <defaults>
+      <allow_any>no</allow_any>
+      <allow_inactive>no</allow_inactive>
+      <allow_active>auth_admin</allow_active>
+    </defaults>
+    <annotate key="org.freedesktop.policykit.exec.path">/usr/lib/nimbus-control/bin/nimbus-grant-access</annotate>
+  </action>
+</policyconfig>

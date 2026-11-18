@@ -1,4 +1,14 @@
 control-center/bin/nimbus-migrate usr/lib/nimbus-control/bin/
+control-center/bin/nimbus-control-server usr/lib/nimbus-control/bin/
+control-center/bin/nimbus-control-open usr/lib/nimbus-control/bin/
+control-center/bin/nimbus-grant-access usr/lib/nimbus-control/bin/
 control-center/migrations/*.py usr/lib/nimbus-control/migrations/
+control-center/backend/nimbus_control usr/lib/nimbus-control/python/
+control-center/common/nimbus_common usr/lib/nimbus-control/python/
+control-center/privd/nimbus_privd usr/lib/nimbus-control/python/
+control-center/privd/nimbus-privd.py usr/lib/nimbus-control/privd/
+control-center/frontend/* usr/lib/nimbus-control/www/
 control-center/systemd/* usr/lib/systemd/system/
 control-center/data/samba/nimbus.conf etc/samba/nimbus/
+control-center/data/nimbus-control.desktop usr/share/applications/
+control-center/data/polkit/org.nimbusos.control.grant-access.policy usr/share/polkit-1/actions/

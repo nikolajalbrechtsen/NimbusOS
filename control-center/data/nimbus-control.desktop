@@ -1,0 +1,22 @@
+# =============================================================================
+# nimbus-control.desktop: "Nimbus Control Center" in the app menu and panel
+# =============================================================================
+# What: starts the launcher, which opens the Control Center as its own window
+#       (Chromium app mode, window class NimbusControl). The NimbusOS global
+#       theme's panel pins this file. The icon is the NimbusOS logo from
+#       nimbusos-branding.
+# Why:  spec section 3 (Launcher).
+# =============================================================================
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=Nimbus Control Center
+GenericName=System Control Center
+Comment=Apps, virtual machines, storage, shares and updates
+Exec=/usr/lib/nimbus-control/bin/nimbus-control-open
+Icon=@NIMBUS_ID@
+Terminal=false
+Categories=System;Settings;
+Keywords=docker;apps;containers;vm;virtual machine;storage;nas;shares;samba;updates;
+StartupWMClass=NimbusControl
+StartupNotify=true
