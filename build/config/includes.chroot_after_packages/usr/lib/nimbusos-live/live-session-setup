@@ -1,0 +1,25 @@
+#!/bin/sh
+# =============================================================================
+# /usr/lib/nimbusos-live/live-session-setup: per-user live session setup
+# =============================================================================
+# What: started at login by /etc/xdg/autostart/nimbus-live-session.desktop.
+#       In a live session (the boot medium is mounted at /run/live/medium) it
+#       copies "Install NimbusOS" onto the user's desktop, executable so
+#       Plasma starts it without asking. Does nothing if the launcher is
+#       already there or this is not a live session.
+# Why:  the live user is created at boot by live-config, so this can't be
+#       done at image build time; Debian's own desktop icon is hidden by
+#       hook 0200.
+# =============================================================================
+set -eu
+
+[ -d /run/live/medium ] || exit 0
+
+desktop="$(xdg-user-dir DESKTOP 2>/dev/null || true)"
+[ -n "$desktop" ] || desktop="$HOME/Desktop"
+target="$desktop/nimbus-install.desktop"
+[ -e "$target" ] && exit 0
+
+mkdir -p "$desktop"
+cp /usr/share/applications/nimbus-install.desktop "$target"
+chmod 0755 "$target"

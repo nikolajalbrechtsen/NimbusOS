@@ -58,20 +58,22 @@ NimbusOS/
 │       │   ├── 0100-flathub-preseed.hook.chroot     runs the packaged Flathub setup once at build time
 │       │   ├── 0200-live-installer-launcher.hook.chroot  hides Debian's "Install Debian" menu entry and desktop icon
 │       │   ├── 0300-live-units.hook.chroot          enables every live-only unit in includes.chroot_after_packages
-│       │   └── 0900-verify-image.hook.chroot        fails the build if the image would be broken (15 checks)
-│       ├── includes.chroot_after_packages/          live-session-only files (NOTE-02, NOTE-06)
-│       │   ├── etc/calamares/settings.conf
-│       │   ├── etc/calamares/modules/{users,bootloader,welcome,finished}.conf
+│       │   ├── 0400-live-manifest.hook.chroot       lists the live-only files for nimbus-target-cleanup (NOTE-63)
+│       │   └── 0900-verify-image.hook.chroot        fails the build if the image would be broken (18 checks)
+│       ├── includes.chroot_after_packages/          live-session-only files (NOTE-02, NOTE-06, NOTE-63)
+│       │   ├── etc/calamares/settings.conf          Debian's sequence, nimbusos branding, two NimbusOS steps
+│       │   ├── etc/calamares/modules/{users,bootloader,welcome,packages,displaymanager}.conf
 │       │   ├── etc/calamares/modules/shellprocess_nimbus-sources-final.conf
 │       │   ├── etc/calamares/modules/shellprocess_nimbus-target-cleanup.conf
-│       │   ├── etc/systemd/system/var-lib-docker.mount   tmpfs for Docker in the live session only (NOTE-21)
+│       │   ├── etc/systemd/system/var-lib-{docker,containerd}.mount   tmpfs, live session only (NOTE-21)
 │       │   ├── etc/xdg/autostart/nimbus-live-session.desktop
 │       │   ├── usr/lib/nimbusos-live/{sources-final,target-cleanup,live-session-setup}
 │       │   └── usr/share/applications/nimbus-install.desktop   "Install NimbusOS"
-│       └── bootloaders/                  overlays; live-build copies them over its own templates itself
+│       └── bootloaders/                  overlays; live-build copies them over its own templates itself (NOTE-64)
 │           ├── splash.svg                one splash for both menus, rendered by live-build in the chroot (NOTE-12)
-│           ├── grub-pc/                  GRUB (EFI) live menu: labels + theme.cfg; live-theme/ is filled from nimbusos-branding
-│           └── isolinux/                 ISOLINUX menu: stdmenu.cfg, labels
+│           ├── grub-pc/{grub,theme}.cfg  GRUB (UEFI) menu: three "Start NimbusOS" entries; live-theme/ is filled from nimbusos-branding
+│           ├── syslinux_common/          ISOLINUX (BIOS) menu: live.cfg.in entries, menu.cfg title, stdmenu.cfg colours
+│           └── isolinux/isolinux.cfg     10-second timeout
 │
 ├── packages/                         one Debian source package per directory: debhelper-compat (= 13), 3.0 (native)
 │   ├── nimbusos-archive-keyring/     keys/*.asc → dearmored NimbusOS keyring
@@ -131,6 +133,8 @@ NimbusOS/
 │       ├── image-apt-check.test.sh   final-image APT check: good image + 6 failure modes
 │       ├── docker-archive.test.sh    fetch-docker-key.sh --verify-local: real files + 8 breakages
 │       ├── hooks.test.sh             the live-build hooks in a container standing in for the chroot
+│       ├── live-files.test.sh        the installer configuration and live-only scripts (sources, cleanup)
+│       ├── bootloaders.test.sh       the live boot menus, made by live-build's own scripts
 │       └── image-initrd-check.test.sh  the boot-splash check against real Trixie initramfs images
 │
 └── docs/
@@ -318,7 +322,7 @@ Because live-build only places keys at that fixed `trusted.gpg.d/<name>.asc` pat
 
 `build.sh` and `tools/build-debs.sh` check the fingerprint before every build. Both sources carry `arch=amd64`, so adding a foreign architecture later (for example i386) doesn't make apt look for Docker packages Docker doesn't build. `nimbusos-release` ships `nimbusos-docker.pref`, which pins the Docker origin the same way as NimbusOS's: priority 1 for everything, 500 for `docker-ce`, `docker-ce-cli`, `containerd.io`, `docker-compose-plugin`, `docker-buildx-plugin`, `docker-ce-rootless-extras` and `docker-model-plugin`. That list was taken from the 11 packages Docker's `trixie` index actually contains: `docker-ce` 29.x recommends `docker-ce-rootless-extras`. Docker's repository therefore cannot replace Debian packages, and `packages/nimbusos-release/tests/apt-integration.test.sh` proves it (§7).
 
-**NOTE-06 — Calamares configuration is live-only.** Calamares runs only in the live session, and its own `packages` step purges it from the installed system. `settings.conf` and the module overrides therefore live in `includes.chroot_after_packages/`, where they replace `calamares-settings-debian`'s copies inside the live image. The branding component `/usr/share/calamares/branding/nimbusos/` ships in `nimbusos-branding`, as specified. Debian's `bootloader-config` and `sources-media` steps are kept. Debian's `sources-final` is replaced by `nimbus-sources-final`, which writes deb822 `/etc/apt/sources.list.d/debian.sources` with `main contrib non-free non-free-firmware` for `trixie`, `trixie-updates` and `trixie-security`, and empties the legacy `sources.list`. The NimbusOS and Docker sources are already on the target, because `nimbusos-release` is part of the copied image. A final `nimbus-target-cleanup` step deletes the live-only files from the target. `users.conf` uses the Calamares 3.3 `hostname:` block with `template: "nimbusos"`.
+**NOTE-06 — Calamares configuration is live-only.** Calamares runs only in the live session, and NimbusOS's `packages.conf` removes it from the installed system: Debian's list removes the live packages and `calamares-settings-debian` but leaves `calamares` itself installed, so NimbusOS adds it (NOTE-63). `settings.conf` and the module overrides therefore live in `includes.chroot_after_packages/`, where they replace `calamares-settings-debian`'s copies inside the live image. The branding component `/usr/share/calamares/branding/nimbusos/` ships in `nimbusos-branding`, as specified. Debian's `bootloader-config` and `sources-media` steps are kept. Debian's `sources-final` is replaced by `nimbus-sources-final`, which writes deb822 `/etc/apt/sources.list.d/debian.sources` with `main contrib non-free non-free-firmware` for `trixie`, `trixie-updates` and `trixie-security`, and empties the legacy `sources.list`. The NimbusOS and Docker sources are already on the target, because `nimbusos-release` is part of the copied image. A final `nimbus-target-cleanup` step deletes the live-only files from the target. `users.conf` uses the Calamares 3.3 `hostname:` block with `template: "nimbusos"`.
 
 **NOTE-07 — Secure Boot and the EFI directory.** Installed systems boot through Debian's signed shim and GRUB, which NimbusOS does not rebuild, so Secure Boot keeps working. `/etc/default/grub.d/10-nimbusos.cfg` sets `GRUB_DISTRIBUTOR=NimbusOS`. That makes the boot entries read "NimbusOS" and makes `grub-install` use `EFI/nimbusos/`. Calamares' `efiBootloaderId` is set to the same value, so the installer and later GRUB package upgrades agree, and `installEFIFallback: true` also writes `EFI/BOOT/BOOTX64.EFI`. This depends on assumption A6. If smoke test 1 fails with Secure Boot on, the fallback is `GRUB_DISTRIBUTOR=Debian`: the EFI directory stays `EFI/debian`, but boot entries then read "Debian GNU/Linux".
 
@@ -355,7 +359,7 @@ Because live-build only places keys at that fixed `trusted.gpg.d/<name>.asc` pat
 
 **NOTE-20 — libvirt daemons (checked in Trixie, deliverable 5).** libvirt 11.3 in Trixie runs the monolithic `libvirtd`: `libvirtd.service`, `libvirtd.socket` and `virtlogd.socket` are enabled by `libvirt-daemon-system` itself, and the modular `virtqemud` units aren't shipped. So the postinst enables nothing for libvirt, and the service-health alert checks `libvirtd`. `libvirt-daemon-config-network` installs the `default` NAT network but leaves `autostart/` empty. On first install the postinst therefore creates `/etc/libvirt/qemu/networks/autostart/default.xml` → `/etc/libvirt/qemu/networks/default.xml`, the same link `virsh net-autostart` makes, which needs no running daemon and takes effect when libvirtd next starts.
 
-**NOTE-21 — The live session.** The live root filesystem is an overlay, which Docker's `overlay2` storage driver cannot sit on. A live-only mount unit therefore puts `/var/lib/docker` on tmpfs: apps work but are gone at shutdown. Disk formatting and pool changes are disabled behind the banner "Install NimbusOS to set up storage"; read-only views work.
+**NOTE-21 — The live session.** The live root filesystem is an overlay, which Docker's `overlay2` storage driver cannot sit on. Two live-only mount units therefore put `/var/lib/docker` and `/var/lib/containerd` on tmpfs (containerd's overlayfs snapshotter has the same problem, and Docker can keep images there): apps work but are gone at shutdown. Both carry `ConditionKernelCommandLine=boot=live`, so even if one were left on an installed system it would not mount (NOTE-63). Disk formatting and pool changes are disabled behind the banner "Install NimbusOS to set up storage"; read-only views work.
 
 **NOTE-22 — No firewall.** NimbusOS ships without an active firewall. If you enable one, allow SMB with `ufw allow 445/tcp`, or for firewalld `firewall-cmd --permanent --add-service=samba && firewall-cmd --reload`. Settings shows the same text.
 
@@ -530,7 +534,7 @@ The `*.list.binary` files are never read: they only fill the ISO's package pool,
 - **0100-flathub-preseed:** runs `nimbusos-release`'s own Flathub setup (NOTE-11), which writes its stamp, so the boot-time unit skips itself. It retries twice, then fails the build: the image promises Flathub. `flatpak remote-add --system` works as root without D-Bus, so also in the chroot. The hook removes Flatpak's download cache.
 - **0200-live-installer-launcher:** `calamares-settings-debian` 13.0.13 ships the menu entry `calamares-install-debian.desktop` ("Install Debian") and an autostart entry that copies it onto the desktop. The hook sets `NoDisplay=true` and `Hidden=true` in their `[Desktop Entry]` groups, in place. Calamares purges that package from installed systems, so a diversion would only leave a stale record on the target. If Debian renames either file, the build fails here. The live session shows "Install NimbusOS" instead (deliverable 7). Debian's own entry already has one desktop-file-validate error (`StartupNotify=True`); the hook adds none.
 - **0300-live-units:** enables every unit file in `includes.chroot_after_packages/etc/systemd/system/` (`systemctl enable` works offline). A unit that didn't reach the chroot, or can't be enabled, fails the build. Deliverable 7's `var-lib-docker.mount` (NOTE-21) therefore needs an `[Install]` section, and `nimbus-target-cleanup` must remove it and its link from installed systems.
-- **0900-verify-image:** 15 checks plus one warning, each printed as ok, FAIL with the reason, or warn; any FAIL stops the build:
+- **0900-verify-image:** 18 checks plus one warning (15 at deliverable 6; deliverable 7 added `installer`, `live-files` and `installer-launcher`, NOTE-63), each printed as ok, FAIL with the reason, or warn; any FAIL stops the build:
   - `/usr/lib/os-release` identity and its diversion (`/etc/os-release` stays diverted by live-build until after the hooks);
   - the seven NimbusOS packages at one version;
   - every package in the package lists installed, and every Depends and Recommends of `nimbusos-desktop`;
@@ -543,6 +547,34 @@ The `*.list.binary` files are never read: they only fill the ISO's package pool,
   - an empty machine-id.
 
   A live-user group from `NIMBUS_LIVE_USER_GROUPS` that doesn't exist only warns: live-config silently skips it, and `bluetooth`, `scanner` and `lpadmin` depend on optional packages. Deliverable 7 adds its own checks (Calamares settings and branding) to this hook.
+
+### Found while writing the live files and boot menus (deliverable 7)
+
+**NOTE-63 — The installer and the live-only files.** Checked against Calamares `3.3.14-1`, `calamares-settings-debian 13.0.13`, live-config and live-build in Trixie:
+- **Sequence:** Debian's own, with branding `nimbusos`. Debian's `sources-final` is replaced by `shellprocess@nimbus-sources-final`, and `shellprocess@nimbus-target-cleanup` runs after it, before `umount`. Both run inside the installed system (`dontChroot: false`), where their scripts arrived with the copied image. That needs no shellprocess variables: Calamares 3.3 keeps those names as UTF-16 literals, so they couldn't be confirmed from the binary.
+- **Module settings:** Debian's `calamares` package ships no default module configs. So modules without a file in `/etc/calamares/modules` run on built-in defaults; `plymouthcfg`, for example, then leaves the NimbusOS boot splash alone. The files NimbusOS changes:
+  - `users.conf`: Debian's groups plus `docker`, `libvirt`, `kvm`, `nimbus-control` with `must_exist: true`. A missing group stops the install with Calamares' "These groups are missing in the target system" instead of producing a user without Control Center access. Debian's optional groups are created if missing, as Debian does. The host name template is `nimbusos`.
+  - `bootloader.conf`: `efiBootloaderId: nimbusos`, equal to the lower-cased `GRUB_DISTRIBUTOR` (NOTE-07). Calamares' `grubcfg` writes `GRUB_DISTRIBUTOR` from the branding's `bootloaderEntryName` ("NimbusOS"), and `/etc/default/grub.d/10-nimbusos.cfg` sets the same value.
+  - `packages.conf`: Debian's removal list plus `calamares` (apt `--purge remove`, then `autoremove`).
+  - `displaymanager.conf`: SDDM only. Automatic login uses `plasma`, which Calamares finds in `/usr/share/wayland-sessions/` (NOTE-08).
+  - `welcome.conf`: at least 32 GB of disk and 4 GB of memory. This is a policy choice, to be checked against the installed size in deliverable 11.
+- **Live autologin:** live-config's `0085-sddm` writes `Session=plasma.desktop` when the session manager is Plasma. In Plasma 6 that file is the Wayland session, so the live session needs no NimbusOS file. The deliverable 11 smoke test confirms it.
+- **`sources-final`:** writes `/etc/apt/sources.list.d/debian.sources` (deb822) for trixie, trixie-updates and trixie-security, with `main contrib non-free non-free-firmware`, Signed-By `/usr/share/keyrings/debian-archive-keyring.pgp`, and no backports. `sources.list` keeps only comments. Tested with `apt-get update` against deb.debian.org: no warning, and all 12 suite/component pairs are fetched. Some are empty today (no contrib update yet), and apt keeps no file for those.
+- **Removing live-only files from installed systems:** hook 0400 writes `/usr/lib/nimbusos-live/live-files` from the image's `includes.chroot_after_packages` itself, so the list can't drift. It fails the build if a live file belongs to a package that stays installed. `target-cleanup` then disables each listed unit, removes each listed file (but keeps one owned by an installed package, and says so) and removes `/usr/lib/nimbusos-live`. Both tmpfs mounts also have `ConditionKernelCommandLine=boot=live` as a second line of defence.
+- **Launchers:** "Install NimbusOS" (`nimbus-install.desktop`) runs Debian's own wrapper `calamares-install-debian` (pkexec, its fstab and Xwayland handling). `live-session-setup` copies it onto the live user's desktop, executable, once, and only when `/run/live/medium` exists.
+
+**NOTE-64 — The live boot menus.** Checked against live-build `1:20250505+deb13u1`; tested with its own `binary_grub_cfg`, `binary_syslinux` and `binary_bootloader_splash`:
+- **GRUB (UEFI):** live-build names its generated entries "Live system (amd64)" in code, not in a template. So `grub-pc/grub.cfg` has NimbusOS's own three entries, built from live-build's kernel, initrd and boot-option tokens, as its template suggests for extra entries:
+  - "Start NimbusOS";
+  - "Start NimbusOS (safe graphics)", the same with `nomodeset`;
+  - "Start NimbusOS (fail-safe mode)";
+  - plus live-build's Utilities submenu.
+
+  The menu has a 10-second timeout. `theme.cfg` loads the three Inter fonts and the nimbusos theme from `live-theme/` (GRUB doesn't load a theme's fonts by itself). live-build rewrites bare token names and `//` in every line, so these files' comments avoid both.
+- **ISOLINUX (BIOS):** `syslinux_common/live.cfg.in` has the same three entries, `menu.cfg` the title, `stdmenu.cfg` the Nimbus Dark colours, and `isolinux/isolinux.cfg` a 10-second timeout (live-build waits forever by default).
+- **Fail-safe options:** live-build's default fail-safe line drops `username`, `user-default-groups`, the locale and the rest, which would leave the live user without the Control Center groups. `build.sh` therefore passes `--bootappend-live-failsafe`: the same live settings plus live-build's own fail-safe options (`memtest noapic noapm nodma nomce nosmp nosplash vga=788`).
+- **Splash:** `splash.svg` uses the logo and palette, and live-build's `@VERSION@` token is filled from os-release. live-build renders it at 640×480 for ISOLINUX and 800×600 for GRUB's fallback. The title stays above text row 12, where the ISOLINUX menu starts.
+- **Theme preparation:** it moved from `build.sh` into `nimbus_prepare_grub_theme` (`build/lib/common.sh`), so the test runs exactly the build's code.
 
 ### Found by the Trixie archive check (deliverable 3)
 
@@ -721,6 +753,30 @@ How to read it: the NimbusOS and Docker repositories offer `bash` 99.0 and 98.0,
 - **Earlier tests still pass:** `deb-version` 40, `image-apt-check` 7, `docker-archive` 9.
 - **Found while testing:** the first verify-hook draft had three bugs, all fixed before the runs above. A correct Plymouth theme would have been reported as a failure. `grep -q` at the end of a pipe under `pipefail` could turn a match into a failure. And `readlink -f` on a missing link gave a confusing message. The tests now cover each case.
 
+**Deliverable 7** (live files and boot menus, 2026-11-18, `dev-shell.sh` clone mode):
+- **`tools/tests/live-files.test.sh`:** 50 passed. Covered:
+  - all Calamares files are valid YAML;
+  - every module `settings.conf` names exists in Trixie's `calamares` or `calamares-settings-debian`, and each instance has its config;
+  - both launchers pass desktop-file-validate;
+  - the mounts are conditional on `boot=live`, and `Where=` matches the unit name;
+  - `sources-final`: `apt-get update` works without a warning, all 12 pairs are fetched, a second run changes nothing, and it fails clearly without Debian's keyring;
+  - `live-session-setup`: does nothing outside a live session, then puts the launcher on the desktop once;
+  - `target-cleanup` after hooks 0300 and 0400: all 16 live files gone, both mounts disabled with no link left, the listed `/etc/issue.net` kept because it belongs to base-files, and a missing list fails.
+- **`tools/tests/bootloaders.test.sh`:** 31 passed, using live-build's own scripts. Covered:
+  - GRUB: three entries with kernel, initrd and the right options (safe graphics adds `nomodeset`; fail-safe keeps the live user and groups); no "Live system"; no leftover token; every cfg passes `grub-script-check`; the theme fonts exist;
+  - ISOLINUX: the same three entries, the first as default, the NimbusOS title, the timeout;
+  - the splash: 640×480 and 800×600 PNGs, looked at.
+- **`tools/tests/hooks.test.sh`:** 90 passed (was 72). Covered:
+  - hook 0300 with the real includes enables both mounts;
+  - hook 0400 lists every file and itself, and refuses a file owned by `base-files` and one that didn't reach the chroot;
+  - the verify hook reports `installer`, `live-files` and `installer-launcher` as ok with the real files;
+  - nine more deliberate breakages each produce a FAIL naming the problem: no cleanup step, Debian branding, Debian's `sources-final` back, `nimbus-control` missing from users.conf, users.conf not YAML, a wrong EFI id, Calamares not removed, no live-file list, Debian's "Install Debian" visible.
+- **Still pass:** `deb-version` 40, `image-apt-check` 7, `docker-archive` 9, `image-initrd-check` 9. shellcheck has no warnings for the new sh and bash scripts.
+- **Found while testing:**
+  - live-build's `binary_syslinux` expects the kernel in `binary/live/` already, so the test tree now has it;
+  - my own comments quoting "Live system" tripped a check, which now skips comments;
+  - `apt-cache policy` and `apt-get indextargets` leave out suite/component pairs whose index is empty, so the test checks what apt fetches (`--print-uris`).
+
 **os-release, unattended-upgrades, Docker and Calamares** (`os-identity.test.sh`, NimbusOS os-release installed). Excerpts:
 
 ```
@@ -774,7 +830,7 @@ Facts confirmed by reading live-build `1:20250505+deb13u1`'s own scripts and Deb
 | 4 | Build-time archives | `build/config/archives/{docker.list.chroot,docker.key.chroot,docker.list.binary}`, `tools/fetch-docker-key.sh`, `tools/tests/docker-archive.test.sh` |
 | 5 | Debian packaging (7 packages), in three parts | **Part 1:** `packages/{nimbusos-archive-keyring,nimbusos-docker-keyring,nimbusos-release,nimbusos-desktop}/**` (os-release, source, pinning with the `apt-cache policy` proof, unattended-upgrades drop-ins, `nimbus-update`, timers, Flathub setup, tests), plus `build-debs.sh` token rendering, mode normalization and `--only`. **Part 2 (done):** `packages/nimbusos-branding/**` (all themes and art, CC-BY-SA-4.0 text from SPDX, install test). **Part 3 (done):** `packages/{nimbus-control,nimbus-catalog}/{debian,tests}/**`, plus the parts of `control-center/` the packaging runs: `systemd/*` (all units), `data/samba/nimbus.conf`, `bin/nimbus-migrate`, `migrations/0001_initial.py` and `tests/test_migrate.py` (NOTE-58 to NOTE-61) |
 | 6 | Live hooks (done) | `build/config/hooks/live/{0100,0200,0300,0900}-*.hook.chroot`, `nimbus_check_image_initrd` in `build/lib/common.sh` (instead of a hook 9990, NOTE-62), `tools/tests/{hooks,image-initrd-check}.test.sh` |
-| 7 | Live-only files and boot menus | `build/config/includes.chroot_after_packages/**`, `build/config/bootloaders/**` |
+| 7 | Live-only files and boot menus (done) | `build/config/includes.chroot_after_packages/**`, `build/config/bootloaders/**`, hook `0400-live-manifest`, the verify hook's installer checks, `--bootappend-live-failsafe` and `nimbus_prepare_grub_theme` in `build/lib/common.sh`, `tools/tests/{live-files,bootloaders}.test.sh` (NOTE-63, NOTE-64) |
 | 8 | Nimbus Control Center | `control-center/**` (backend, common, privd, frontend, the remaining bin programs, data, tests), in several batches, each adding its lines to `packages/nimbus-control/debian/install` (NOTE-61) |
 | 9 | Catalog | `catalog/SCHEMA.md`, `catalog/manifest.schema.json` (with `template_version`, NOTE-60), 10 apps |
 | 10 | CI/CD and docs (CI also runs `tools/tests/*.test.sh` and `tools/fetch-docker-key.sh --verify-local` / `--check`) | `.github/workflows/*`, `.github/dependabot.yml`, `apt/conf/*`, `tools/{publish-apt.sh,releases-json.py,split-iso.sh,pin-actions.sh}`, `control-center/tests/integration/samba-ucf-keeps-include.sh`, `README.md`, `LICENSE`, `LICENSES/*`, `.shellcheckrc`, `ruff.toml`, `docs/{RELEASING,SIGNING}.md`, `docs/release-notes/v0.1.0.md` |
@@ -799,3 +855,4 @@ Facts confirmed by reading live-build `1:20250505+deb13u1`'s own scripts and Deb
    - state migrations run step by step through `schema_version`, with a backup first and one clear journal message on failure (NOTE-59);
    - each app manifest has its own `template_version` (NOTE-60).
 10. **No hook 9990** (deliverable 6). live-build already regenerates the initramfs after all hooks, so `build.sh` checks that the ISO's initramfs carries the NimbusOS boot splash instead (NOTE-62).
+11. **Installer minimums** (deliverable 7): 32 GB of disk and 4 GB of memory in Calamares' welcome check. This is a policy choice; deliverable 11 checks it against the installed size (NOTE-63).

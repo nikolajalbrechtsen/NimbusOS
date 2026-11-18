@@ -1,0 +1,16 @@
+# =============================================================================
+# nimbus-live-session.desktop: per-user setup of the live session
+# =============================================================================
+# What: at login, runs /usr/lib/nimbusos-live/live-session-setup, which puts
+#       "Install NimbusOS" on the desktop. It does nothing outside a live
+#       session.
+# Why:  the live user is created at boot (live-config), so this can't be done
+#       at image build time. Removed from installed systems by
+#       nimbus-target-cleanup.
+# =============================================================================
+[Desktop Entry]
+Type=Application
+Name=NimbusOS live session setup
+Exec=/usr/lib/nimbusos-live/live-session-setup
+NoDisplay=true
+X-KDE-autostart-phase=2

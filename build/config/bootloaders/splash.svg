@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- NimbusOS live boot splash. live-build renders it inside the image build
+     chroot with rsvg-convert: 640x480 as the ISOLINUX (BIOS) menu background,
+     800x600 as GRUB's fallback (the GRUB menu normally draws the nimbusos
+     theme from nimbusos-branding instead). live-build fills in the VERSION
+     token from the image's os-release VERSION_ID. The logo and title stay
+     above y=180, because the ISOLINUX menu starts at text row 12 (y=192).
+     Nimbus Dark palette, the logo from nimbusos-branding art/logo.svg.
+     CC-BY-SA-4.0 (docs/PLAN.md NOTE-12, NOTE-64). -->
+<svg xmlns="http://www.w3.org/2000/svg" width="640" height="480" viewBox="0 0 640 480">
+  <title>NimbusOS</title>
+  <defs>
+    <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#070b12"/>
+      <stop offset="0.55" stop-color="#0b111b"/>
+      <stop offset="1" stop-color="#121c2c"/>
+    </linearGradient>
+    <radialGradient id="glowBlue" cx="0.24" cy="0.2" r="0.6">
+      <stop offset="0" stop-color="#6cc4ff" stop-opacity="0.20"/>
+      <stop offset="1" stop-color="#6cc4ff" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="glowViolet" cx="0.82" cy="0.82" r="0.55">
+      <stop offset="0" stop-color="#b39cff" stop-opacity="0.16"/>
+      <stop offset="1" stop-color="#b39cff" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="cloud" gradientUnits="userSpaceOnUse" x1="70" y1="52" x2="214" y2="192">
+      <stop offset="0" stop-color="#a6e0ff"/>
+      <stop offset="0.55" stop-color="#6cc4ff"/>
+      <stop offset="1" stop-color="#b39cff"/>
+    </linearGradient>
+  </defs>
+  <rect width="640" height="480" fill="url(#sky)"/>
+  <rect width="640" height="480" fill="url(#glowBlue)"/>
+  <rect width="640" height="480" fill="url(#glowViolet)"/>
+  <g fill="#e7eef8">
+    <circle cx="70" cy="44" r="0.9" opacity="0.55"/>
+    <circle cx="164" cy="24" r="0.7" opacity="0.45"/>
+    <circle cx="470" cy="30" r="0.8" opacity="0.5"/>
+    <circle cx="570" cy="86" r="0.7" opacity="0.4"/>
+    <circle cx="40" cy="300" r="0.7" opacity="0.35"/>
+    <circle cx="604" cy="380" r="0.8" opacity="0.35"/>
+  </g>
+  <!-- the logo, 256x256 scaled to 64x64, centred at x=320 -->
+  <g transform="translate(288 26) scale(0.25)">
+    <g fill="url(#cloud)">
+      <circle cx="96" cy="140" r="46"/>
+      <circle cx="146" cy="110" r="58"/>
+      <circle cx="186" cy="150" r="38"/>
+      <rect x="58" y="140" width="166" height="48" rx="24"/>
+    </g>
+    <path d="M86 172 h96" stroke="#06182a" stroke-opacity="0.18" stroke-width="6" stroke-linecap="round"/>
+  </g>
+  <text x="320" y="128" text-anchor="middle" font-family="Inter, DejaVu Sans, sans-serif"
+        font-size="30" font-weight="700" fill="#e7eef8">NimbusOS</text>
+  <text x="320" y="152" text-anchor="middle" font-family="Inter, DejaVu Sans, sans-serif"
+        font-size="12" fill="#8d9db3">Live system and installer · @VERSION@</text>
+</svg>

@@ -1,0 +1,71 @@
+#!/bin/sh
+# =============================================================================
+# /usr/lib/nimbusos-live/target-cleanup: remove live-only files from the target
+# =============================================================================
+# What: run by Calamares inside the installed system as the last step
+#       (shellprocess nimbus-target-cleanup), after the packages step has
+#       purged Calamares. For each path in /usr/lib/nimbusos-live/live-files
+#       (the image's includes.chroot_after_packages, listed by hook 0400 at
+#       build time):
+#         - a path that belongs to an installed package is kept (and said
+#           so), so a mistake in the list can never break a package;
+#         - a systemd unit is disabled first (its WantedBy links go);
+#         - the file is removed.
+#       Then removes the empty /usr/lib/nimbusos-live and checks that no
+#       live-only unit is still enabled. Fails if the list is missing or a
+#       unit can't be disabled; Calamares then stops the install.
+#       An optional argument names another root directory (tests).
+# Why:  docs/PLAN.md NOTE-63: the Docker tmpfs, the installer launcher and
+#       the live autostart must not reach an installed system.
+# =============================================================================
+set -eu
+
+ROOT="${1:-/}"
+ROOT="${ROOT%/}"
+me="nimbus-target-cleanup"
+LIST=/usr/lib/nimbusos-live/live-files
+
+in_root() {   # in_root COMMAND ARGS...: run COMMAND for the target root
+	cmd="$1"; shift
+	if [ -n "$ROOT" ]; then "$cmd" --root="$ROOT" "$@"; else "$cmd" "$@"; fi
+}
+
+[ -f "$ROOT$LIST" ] || {
+	echo "$me: $LIST is missing; the image was built without hook 0400-live-manifest." >&2
+	exit 1
+}
+
+removed=0
+units=""
+# Read the whole list first: the list itself is one of the files removed.
+paths="$(grep '^/' "$ROOT$LIST" || true)"
+for path in $paths; do
+	if [ ! -e "$ROOT$path" ] && [ ! -L "$ROOT$path" ]; then
+		continue
+	fi
+	if owner="$(in_root dpkg-query -S "$path" 2>/dev/null)"; then
+		echo "$me: keeping $path: it belongs to ${owner%%:*}"
+		continue
+	fi
+	case "$path" in
+		/etc/systemd/system/*.service|/etc/systemd/system/*.socket|/etc/systemd/system/*.timer|\
+		/etc/systemd/system/*.mount|/etc/systemd/system/*.path)
+			unit="${path##*/}"
+			in_root systemctl --quiet disable "$unit" \
+				|| { echo "$me: could not disable $unit" >&2; exit 1; }
+			units="$units $unit"
+			;;
+	esac
+	rm -f "$ROOT$path"
+	removed=$((removed + 1))
+done
+
+rmdir "$ROOT/usr/lib/nimbusos-live" 2>/dev/null || true
+
+for unit in $units; do
+	if [ -n "$(find "$ROOT/etc/systemd/system" -name "$unit" 2>/dev/null)" ]; then
+		echo "$me: $unit is still enabled after removal" >&2
+		exit 1
+	fi
+done
+echo "$me: removed $removed live-session file(s) from the installed system${units:+; disabled$units}"

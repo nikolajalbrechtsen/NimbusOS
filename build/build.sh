@@ -104,30 +104,9 @@ EOF
 	(cd "$dest" && APT_CONFIG="$tmp/apt.conf" apt-get -q download "${pkgs[@]}")
 }
 
-# -----------------------------------------------------------------------------
-# Live boot menu theme. live-build itself copies its own templates first and
-# then config/bootloaders/{grub-pc,isolinux,syslinux_common}/ on top, and it
-# renders config/bootloaders/splash.svg into both menus inside the chroot
-# (binary_grub_cfg, binary_syslinux, binary_bootloader_splash in live-build
-# 1:20250505). The only thing added here is the GRUB theme from the freshly
-# built nimbusos-branding, so live and installed boot share one theme.
-# -----------------------------------------------------------------------------
-prepare_grub_theme() {
-	local dir="$work/config/bootloaders/grub-pc" extract theme
-	local -a branding
-	mapfile -t branding < <(find "$debs" -maxdepth 1 -name 'nimbusos-branding_*.deb')
-	nimbus_mktemp_dir extract
-	dpkg-deb -x "${branding[0]}" "$extract"
-	theme="$extract/usr/share/grub/themes/$NIMBUS_ID"
-	[[ -f "$theme/theme.txt" ]] || die "nimbusos-branding does not contain /usr/share/grub/themes/$NIMBUS_ID/theme.txt."
-	rm -rf -- "$dir/live-theme"
-	mkdir -p -- "$dir/live-theme"
-	cp -R --preserve=mode,timestamps -- "$theme/." "$dir/live-theme/"
-	log "bootloaders/grub-pc/live-theme taken from $(basename "${branding[0]}")"
-}
-
 main() {
-	local version display free iso_src iso manifest size limit pkg
+	local version display free iso_src iso manifest size limit pkg initrd
+	local -a branding_debs initrds
 	local -a build_args=()
 
 	while (($#)); do
@@ -250,7 +229,8 @@ main() {
 	fi
 	mkdir -p -- "$work/config/packages.chroot"
 	cp -- "$debs"/*.deb "$work/config/packages.chroot/"
-	prepare_grub_theme
+	mapfile -t branding_debs < <(find "$debs" -maxdepth 1 -name "nimbusos-branding_*.deb")
+	nimbus_prepare_grub_theme "$work/config" "${branding_debs[0]}"
 
 	# --- 5. live-build -------------------------------------------------------
 	step "lb config"

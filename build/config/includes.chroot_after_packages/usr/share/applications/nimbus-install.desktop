@@ -1,0 +1,20 @@
+# =============================================================================
+# nimbus-install.desktop: "Install NimbusOS" (live session only)
+# =============================================================================
+# What: starts Calamares through Debian's wrapper calamares-install-debian
+#       (pkexec, with its fstab and Xwayland handling), under the NimbusOS
+#       name and icon. Shown in the menu and, through live-session-setup, on
+#       the desktop.
+# Why:  replaces Debian's "Install Debian" entry, which hook 0200 hides.
+# =============================================================================
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=Install @NIMBUS_NAME@
+GenericName=System Installer
+Comment=Install @NIMBUS_NAME@ on this computer
+Exec=calamares-install-debian
+Icon=@NIMBUS_ID@
+Terminal=false
+Categories=Qt;System;
+Keywords=installer;calamares;system;

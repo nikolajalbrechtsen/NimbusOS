@@ -440,6 +440,26 @@ nimbus_check_image_apt() {
 	log "Image APT check OK: docker.list from docker.list.binary, Signed-By $NIMBUS_DOCKER_KEYRING_PATH, no build-only key."
 }
 
+# nimbus_prepare_grub_theme CONFIG_DIR BRANDING_DEB — puts the GRUB theme of
+# the nimbusos-branding package into CONFIG_DIR/bootloaders/grub-pc/live-theme,
+# so live and installed boot share one theme. live-build copies its own
+# templates first and config/bootloaders/{grub-pc,isolinux,syslinux_common}/
+# on top (binary_grub_cfg, binary_syslinux in live-build 1:20250505); the
+# NimbusOS theme.cfg loads this theme's fonts (docs/PLAN.md NOTE-64).
+nimbus_prepare_grub_theme() {
+	local config="$1" deb="$2" dir extract theme
+	[[ -f "$deb" ]] || die "nimbus_prepare_grub_theme: no nimbusos-branding package at '$deb'."
+	dir="$config/bootloaders/grub-pc"
+	nimbus_mktemp_dir extract
+	dpkg-deb -x "$deb" "$extract"
+	theme="$extract/usr/share/grub/themes/$NIMBUS_ID"
+	[[ -f "$theme/theme.txt" ]] || die "nimbusos-branding does not contain /usr/share/grub/themes/$NIMBUS_ID/theme.txt."
+	rm -rf -- "$dir/live-theme"
+	mkdir -p -- "$dir/live-theme"
+	cp -R --preserve=mode,timestamps -- "$theme/." "$dir/live-theme/"
+	log "bootloaders/grub-pc/live-theme taken from $(basename "$deb")"
+}
+
 # nimbus_check_image_initrd INITRD — the live initramfs must show the NimbusOS
 # boot splash: the nimbusos Plymouth theme and Plymouth's script plugin.
 # live-build regenerates the initramfs after the hooks (chroot_hacks), so
@@ -593,19 +613,23 @@ nimbus_render_tree() {
 # Debian-mode defaults that are not listed (init system: systemd; live-build's
 # own apt/debootstrap choices) are relied upon deliberately.
 nimbus_lb_config_args() {
-	local display_version="$1" volume append
+	local display_version="$1" volume live append failsafe
 	volume="${NIMBUS_ISO_VOLUME_PREFIX} ${display_version}"
 	volume="${volume:0:32}"                     # ISO 9660 volume IDs are at most 32 characters
 
 	# Kernel command line of the live session (read by live-boot/live-config).
-	append="boot=live components ${NIMBUS_BOOT_EXTRA}"
-	append+=" hostname=${NIMBUS_HOSTNAME}"
-	append+=" username=${NIMBUS_LIVE_USERNAME}"
-	append+=" user-fullname=${NIMBUS_LIVE_USER_FULLNAME}"
-	append+=" user-default-groups=${NIMBUS_LIVE_USER_GROUPS}"   # docs/PLAN.md §2 (users and groups)
-	append+=" locales=${NIMBUS_LOCALE}"
-	append+=" keyboard-layouts=${NIMBUS_KEYBOARD_LAYOUTS}"
-	append+=" timezone=${NIMBUS_TIMEZONE}"
+	live="hostname=${NIMBUS_HOSTNAME}"
+	live+=" username=${NIMBUS_LIVE_USERNAME}"
+	live+=" user-fullname=${NIMBUS_LIVE_USER_FULLNAME}"
+	live+=" user-default-groups=${NIMBUS_LIVE_USER_GROUPS}"   # docs/PLAN.md §2 (users and groups)
+	live+=" locales=${NIMBUS_LOCALE}"
+	live+=" keyboard-layouts=${NIMBUS_KEYBOARD_LAYOUTS}"
+	live+=" timezone=${NIMBUS_TIMEZONE}"
+	append="boot=live components ${NIMBUS_BOOT_EXTRA} ${live}"
+	# The fail-safe entries: live-build's own fail-safe options, plus the same
+	# live user and settings (live-build's default line drops them, which
+	# would leave the live user without the Control Center groups; NOTE-64).
+	failsafe="boot=live components ${live} memtest noapic noapm nodma nomce nosmp nosplash vga=788"
 
 	# The result, read by build.sh and tools/verify-trixie.sh.
 	# shellcheck disable=SC2034
@@ -656,6 +680,7 @@ nimbus_lb_config_args() {
 		--bootloaders "grub-efi,syslinux"
 		--uefi-secure-boot "$NIMBUS_UEFI_SECURE_BOOT"
 		--bootappend-live "$append"
+		--bootappend-live-failsafe "$failsafe"
 		--memtest none
 		# xz gives the smallest squashfs (docs/PLAN.md NOTE-41).
 		--chroot-squashfs-compression-type "$NIMBUS_SQUASHFS_COMPRESSION"

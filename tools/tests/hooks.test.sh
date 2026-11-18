@@ -14,12 +14,18 @@
 #               desktop-file-validate, idempotent, replaces an existing value,
 #               fails if Debian renames a file
 #         0300  enables every unit in includes.chroot_after_packages, fails
-#               if one didn't reach the chroot, accepts none
-#         0900  in this partial image: passes what is right (os-release,
-#               NimbusOS packages, groups, theme, Flathub, APT, tokens,
-#               machine-id), fails what is missing here (Plasma and other
-#               list packages, five services) with exactly those names, and
-#               fails each deliberate breakage with a message naming it.
+#               if one didn't reach the chroot, accepts none; with the real
+#               includes it enables the Docker and containerd tmpfs mounts
+#         0400  lists every live-session file and itself; refuses a live
+#               file owned by a package that stays installed, and one that
+#               didn't reach the chroot
+#         0900  in this partial image, with the real live files in place:
+#               passes what is right (os-release, NimbusOS packages, groups,
+#               theme, installer configuration, live-file list, launchers,
+#               Flathub, APT, tokens, machine-id), fails what is missing here
+#               (Plasma and other list packages, four services) with exactly
+#               those names, and fails each deliberate breakage with a
+#               message naming it.
 #       Also: the hook's package list equals NIMBUS_PACKAGES, and no token is
 #       left after rendering.
 #
@@ -160,6 +166,33 @@ check "enables every unit from includes.chroot_after_packages" \
 systemctl --quiet disable var-lib-nimbustest.mount
 rm -f /etc/systemd/system/var-lib-nimbustest.mount "$INC/var-lib-nimbustest.mount"
 
+# --- the real live-session files, as lb chroot_includes_after_packages copies them -----------
+echo "0300 and 0400 with the real includes.chroot_after_packages"
+INCLUDES="$WORK/includes"
+cp -a "$ROOT/build/config/includes.chroot_after_packages" "$INCLUDES"
+nimbus_render_tree "$INCLUDES"
+rm -rf /live-build/config/includes.chroot_after_packages
+cp -a "$INCLUDES" /live-build/config/includes.chroot_after_packages
+cp -a "$INCLUDES/." /
+check "0300 enables the live-only Docker and containerd mounts" \
+	sh -c 'bash "$1" >/dev/null 2>&1 && [ "$(systemctl is-enabled var-lib-docker.mount)" = enabled ] && [ "$(systemctl is-enabled var-lib-containerd.mount)" = enabled ]' _ \
+	"$HOOKS/0300-live-units.hook.chroot"
+check "0400 lists every live-session file and itself" \
+	sh -c 'bash "$1" >/dev/null 2>&1 && [ "$(grep -c "^/" /usr/lib/nimbusos-live/live-files)" = "$(( $(find "$2" -type f | wc -l) + 1 ))" ] && grep -qx /usr/lib/nimbusos-live/live-files /usr/lib/nimbusos-live/live-files' _ \
+	"$HOOKS/0400-live-manifest.hook.chroot" "$INCLUDES"
+echo "overridden by the live image" >/live-build/config/includes.chroot_after_packages/etc/issue.net
+check "0400 refuses a live file that belongs to a package that stays installed" \
+	sh -c '! bash "$1" >"$2" 2>&1 && grep -q "/etc/issue.net belongs to base-files, which stays on installed systems" "$2"' _ \
+	"$HOOKS/0400-live-manifest.hook.chroot" "$WORK/0400-owned.out"
+rm /live-build/config/includes.chroot_after_packages/etc/issue.net
+mkdir -p /live-build/config/includes.chroot_after_packages/usr/lib/nimbusos-live
+echo x >/live-build/config/includes.chroot_after_packages/usr/lib/nimbusos-live/not-copied
+check "0400 refuses a live file that didn't reach the chroot" \
+	sh -c '! bash "$1" >"$2" 2>&1 && grep -q "not-copied is in the includes but not in the chroot" "$2"' _ \
+	"$HOOKS/0400-live-manifest.hook.chroot" "$WORK/0400-missing.out"
+rm /live-build/config/includes.chroot_after_packages/usr/lib/nimbusos-live/not-copied
+run_hook 0400-live-manifest
+
 # --- 0900 ------------------------------------------------------------------------------------
 echo "0900-verify-image (this partial image)"
 mkdir -p /live-build/config/package-lists
@@ -167,7 +200,7 @@ cp "$ROOT"/build/config/package-lists/*.list.chroot /live-build/config/package-l
 V=0900-verify-image
 check "fails (a partial image is not a NimbusOS image)" sh -c '! bash "$1" >"$2" 2>&1' _ "$HOOKS/$V.hook.chroot" "$WORK/$V.out"
 for name in os-release nimbusos-packages desktop-metapackage groups nimbus-control-user adduser-conf \
-	boot-splash desktop-theme sddm-theme flathub apt-sources tokens machine-id; do
+	boot-splash desktop-theme sddm-theme installer live-files installer-launcher flathub apt-sources tokens machine-id; do
 	check "ok: $name" grep -qx "  ok    $name" "$WORK/$V.out"
 done
 check "FAIL package-lists names what is missing here (plasma-desktop, sddm, calamares)" \
@@ -175,12 +208,13 @@ check "FAIL package-lists names what is missing here (plasma-desktop, sddm, cala
 check "FAIL package-lists does not name installed packages (flatpak, samba)" \
 	bash -c '! grep "^  FAIL  package-lists:" "$1" | tr " " "\n" | grep -qxE "flatpak|samba"' _ "$WORK/$V.out"
 svc="$(line "$V" "  FAIL  services: ")"
-for u in display-manager.service NetworkManager.service docker.service containerd.service var-lib-docker.mount; do
+for u in display-manager.service NetworkManager.service docker.service containerd.service; do
 	check "FAIL services names $u" grep -qF "$u is" <<<"$svc"
 done
 check "FAIL services explains the display manager" grep -qF "display-manager.service is not set (SDDM's postinst sets it)" <<<"$svc"
 for u in nimbus-control.service nimbus-privd.socket nimbus-update-auto.timer nimbus-flathub-setup.service \
-	smbd.service wsdd2.service avahi-daemon.service libvirtd.service unattended-upgrades.service apt-daily-upgrade.timer; do
+	smbd.service wsdd2.service avahi-daemon.service libvirtd.service unattended-upgrades.service apt-daily-upgrade.timer \
+	var-lib-docker.mount var-lib-containerd.mount; do
 	check "services: $u (enabled here) is not named" bash -c '! grep -qF "$1 is" <<<"$2"' _ "$u" "$svc"
 done
 check "nmbd off is accepted" bash -c '! grep -qF "nmbd" <<<"$1"' _ "$svc"
@@ -243,6 +277,38 @@ check "a machine-id in the image" expect_fail machine-id "/etc/machine-id is not
 systemctl --quiet enable nmbd.service
 check "nmbd enabled" expect_fail services "nmbd.service is enabled"
 systemctl --quiet disable nmbd.service
+
+# break_file FILE SED_EXPRESSION: edit FILE (a copy is restored by restore_file)
+break_file() { cp -p "$1" "$WORK/broken.saved"; sed -i -e "$2" "$1"; }
+restore_file() { cp -p "$WORK/broken.saved" "$1"; }
+CM=/etc/calamares/modules
+break_file /etc/calamares/settings.conf '/shellprocess@nimbus-target-cleanup$/d'
+check "installer without the target cleanup step" expect_fail installer "does not run shellprocess@nimbus-target-cleanup"
+restore_file /etc/calamares/settings.conf
+break_file /etc/calamares/settings.conf 's/^branding: .*/branding: debian/'
+check "installer with Debian's branding" expect_fail installer "uses branding 'debian'"
+restore_file /etc/calamares/settings.conf
+break_file /etc/calamares/settings.conf 's/^  - shellprocess@nimbus-sources-final$/  - sources-final/'
+check "installer back on Debian's sources-final" expect_fail installer "still runs Debian's sources-final"
+restore_file /etc/calamares/settings.conf
+break_file "$CM/users.conf" 's/name: nimbus-control$/name: nimbus-other/'
+check "users.conf without nimbus-control" expect_fail installer "does not add new users to nimbus-control"
+restore_file "$CM/users.conf"
+break_file "$CM/users.conf" '$a broken: [yaml'
+check "users.conf that is not YAML" expect_fail installer "users.conf is not valid YAML"
+restore_file "$CM/users.conf"
+break_file "$CM/bootloader.conf" 's/^efiBootloaderId: .*/efiBootloaderId: "debian"/'
+check "an EFI directory that isn't GRUB_DISTRIBUTOR" expect_fail installer "differs from GRUB_DISTRIBUTOR ('${NIMBUS_ID}')"
+restore_file "$CM/bootloader.conf"
+break_file "$CM/packages.conf" "/'calamares'\$/d"
+check "Calamares left on installed systems" expect_fail installer "does not remove calamares;"
+restore_file "$CM/packages.conf"
+mv /usr/lib/nimbusos-live/live-files "$WORK/live-files.saved"
+check "no live-file list" expect_fail live-files "is missing (hook 0400)"
+mv "$WORK/live-files.saved" /usr/lib/nimbusos-live/live-files
+break_file "$APP" 's/^NoDisplay=true$/NoDisplay=false/'
+check "Debian's \"Install Debian\" visible" expect_fail installer-launcher "is not hidden (hook 0200)"
+restore_file "$APP"
 
 mkdir -p "$WORK/lists" && mv /live-build/config/package-lists/*.list.chroot "$WORK/lists/"
 printf 'flatpak\nsamba\n# a comment\n#! nimbus: desktop-recommends\nplymouth\n' >/live-build/config/package-lists/10-test.list.chroot

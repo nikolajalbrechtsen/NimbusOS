@@ -1,0 +1,24 @@
+# =============================================================================
+# var-lib-docker.mount: Docker's data on tmpfs, live session only
+# =============================================================================
+# What: mounts a tmpfs on /var/lib/docker before Docker starts, in the live
+#       session only (ConditionKernelCommandLine=boot=live). Apps work there,
+#       but everything is gone at shutdown.
+# Why:  docs/PLAN.md NOTE-21: the live root is an overlay, which Docker's
+#       overlay2 driver can't sit on. Enabled by hook 0300; removed from
+#       installed systems by nimbus-target-cleanup, and even if it were left
+#       behind, the condition keeps it off without boot=live.
+# =============================================================================
+[Unit]
+Description=Docker data on tmpfs (NimbusOS live session)
+ConditionKernelCommandLine=boot=live
+Before=docker.service
+
+[Mount]
+What=tmpfs
+Where=/var/lib/docker
+Type=tmpfs
+Options=mode=0710,size=50%
+
+[Install]
+WantedBy=local-fs.target

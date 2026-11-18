@@ -1,0 +1,22 @@
+# =============================================================================
+# var-lib-containerd.mount: containerd's data on tmpfs, live session only
+# =============================================================================
+# What: mounts a tmpfs on /var/lib/containerd before containerd starts, in
+#       the live session only (ConditionKernelCommandLine=boot=live).
+# Why:  docs/PLAN.md NOTE-21: containerd's overlayfs snapshotter can't sit on
+#       the live overlay either, and Docker can keep images there (its
+#       containerd image store). Same lifecycle as var-lib-docker.mount.
+# =============================================================================
+[Unit]
+Description=containerd data on tmpfs (NimbusOS live session)
+ConditionKernelCommandLine=boot=live
+Before=containerd.service docker.service
+
+[Mount]
+What=tmpfs
+Where=/var/lib/containerd
+Type=tmpfs
+Options=mode=0711,size=50%
+
+[Install]
+WantedBy=local-fs.target

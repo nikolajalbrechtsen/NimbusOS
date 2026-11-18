@@ -1,0 +1,26 @@
+# =============================================================================
+# config/bootloaders/syslinux_common/live.cfg.in: ISOLINUX live entries (BIOS)
+# =============================================================================
+# What: the same three entries as the GRUB menu, from live-build's tokens for
+#       the kernel, initrd and boot options:
+#         Start NimbusOS / (safe graphics: nomodeset) / (fail-safe mode)
+# Why:  replaces live-build's "Live system (amd64)" entries (NOTE-64).
+# =============================================================================
+label live-@FLAVOUR@
+	menu label ^Start @NIMBUS_NAME@
+	menu default
+	linux @LINUX@
+	initrd @INITRD@
+	append @APPEND_LIVE@
+
+label live-@FLAVOUR@-safe-graphics
+	menu label Start @NIMBUS_NAME@ (safe ^graphics)
+	linux @LINUX@
+	initrd @INITRD@
+	append @APPEND_LIVE@ nomodeset
+
+label live-@FLAVOUR@-failsafe
+	menu label Start @NIMBUS_NAME@ (^fail-safe mode)
+	linux @LINUX@
+	initrd @INITRD@
+	append @APPEND_LIVE_FAILSAFE@

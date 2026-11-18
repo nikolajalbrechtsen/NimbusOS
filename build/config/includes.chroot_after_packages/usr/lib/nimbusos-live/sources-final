@@ -1,0 +1,64 @@
+#!/bin/sh
+# =============================================================================
+# /usr/lib/nimbusos-live/sources-final: final Debian APT sources of the target
+# =============================================================================
+# What: run by Calamares inside the installed system (shellprocess
+#       nimbus-sources-final), after the installation medium's temporary
+#       source is gone:
+#         - writes /etc/apt/sources.list.d/debian.sources (deb822) with
+#           @NIMBUS_DEBIAN_SUITE@, @NIMBUS_DEBIAN_SUITE@-updates and
+#           @NIMBUS_DEBIAN_SUITE@-security, components
+#           "@NIMBUS_ARCHIVE_AREAS@", Signed-By Debian's archive keyring;
+#         - leaves /etc/apt/sources.list with comments only, so no source is
+#           listed twice;
+#         - removes Calamares' temporary base.list and
+#           debian-live-media.list if they are still there.
+#       NimbusOS's and Docker's sources (nimbusos.sources, docker.list) came
+#       with the image and are left alone.
+#       An optional argument names another root directory (tests).
+# Why:  docs/PLAN.md NOTE-06: Debian's sources-final writes only "main
+#       non-free-firmware" plus backports, in the one-line format; NimbusOS
+#       needs all four areas (firmware, contrib packages) and no backports.
+# =============================================================================
+set -eu
+
+ROOT="${1:-/}"
+ROOT="${ROOT%/}"
+me="nimbus-sources-final"
+KEYRING=/usr/share/keyrings/debian-archive-keyring.pgp
+DIR="$ROOT/etc/apt/sources.list.d"
+
+[ -s "$ROOT$KEYRING" ] || { echo "$me: $KEYRING is missing in the target (debian-archive-keyring)." >&2; exit 1; }
+[ -d "$DIR" ] || { echo "$me: $DIR does not exist; is this a Debian system?" >&2; exit 1; }
+
+tmp="$DIR/.debian.sources.nimbus-tmp"
+cat >"$tmp" <<EOF
+# Debian sources of this @NIMBUS_NAME@ system, written by the installer.
+# NimbusOS's own packages come from nimbusos.sources, Docker's from docker.list.
+Types: deb
+URIs: @NIMBUS_MIRROR@
+Suites: @NIMBUS_DEBIAN_SUITE@ @NIMBUS_DEBIAN_SUITE@-updates
+Components: @NIMBUS_ARCHIVE_AREAS@
+Signed-By: $KEYRING
+
+Types: deb
+URIs: @NIMBUS_MIRROR_SECURITY@
+Suites: @NIMBUS_DEBIAN_SUITE@-security
+Components: @NIMBUS_ARCHIVE_AREAS@
+Signed-By: $KEYRING
+EOF
+chmod 0644 "$tmp"
+mv -f "$tmp" "$DIR/debian.sources"
+
+tmp="$ROOT/etc/apt/.sources.list.nimbus-tmp"
+cat >"$tmp" <<'EOF'
+# This file is intentionally empty. APT sources live in /etc/apt/sources.list.d/:
+#   debian.sources    Debian (deb822 format)
+#   nimbusos.sources  NimbusOS updates
+#   docker.list       Docker Engine
+EOF
+chmod 0644 "$tmp"
+mv -f "$tmp" "$ROOT/etc/apt/sources.list"
+
+rm -f "$DIR/base.list" "$DIR/debian-live-media.list"
+echo "$me: wrote /etc/apt/sources.list.d/debian.sources (@NIMBUS_DEBIAN_SUITE@, -updates, -security: @NIMBUS_ARCHIVE_AREAS@)"

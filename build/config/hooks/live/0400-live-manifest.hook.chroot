@@ -1,0 +1,71 @@
+#!/bin/bash
+# =============================================================================
+# build/config/hooks/live/0400-live-manifest.hook.chroot
+# =============================================================================
+# What: writes /usr/lib/nimbusos-live/live-files, the list of every file the
+#       image got from config/includes.chroot_after_packages (read from
+#       /live-build/config, which live-build bind-mounts while hooks run),
+#       plus the list itself. Calamares' nimbus-target-cleanup step removes
+#       exactly these files from installed systems. Fails the build if:
+#         - a listed file is missing from the chroot;
+#         - a listed file belongs to a package that stays on installed
+#           systems, so the live session would be overriding packaged
+#           software. Only the packages Calamares removes (its packages.conf)
+#           may own them: their files go with the package anyway.
+# Why:  docs/PLAN.md §1 ("anything that may change after install ships in a
+#       package") and NOTE-63. A list generated from the includes can't
+#       drift from them the way a hand-kept list in target-cleanup could.
+# =============================================================================
+set -euo pipefail
+
+me="0400-live-manifest"
+SRC=/live-build/config/includes.chroot_after_packages
+LIST=/usr/lib/nimbusos-live/live-files
+PACKAGES_CONF=/etc/calamares/modules/packages.conf
+
+[[ -d "$SRC" ]] || { echo "$me: $SRC is missing; this hook runs only inside lb chroot_hooks." >&2; exit 1; }
+[[ -f "$PACKAGES_CONF" ]] || { echo "$me: $PACKAGES_CONF is missing (includes.chroot_after_packages)." >&2; exit 1; }
+
+# Packages that Calamares removes from installed systems.
+removed=" $(python3 - "$PACKAGES_CONF" <<'EOF'
+import sys, yaml
+conf = yaml.safe_load(open(sys.argv[1]))
+names = []
+for op in conf.get("operations", []):
+    for key in ("remove", "try_remove"):
+        names += [str(n) for n in op.get(key, [])]
+print(" ".join(names))
+EOF
+) "
+
+mapfile -t paths < <(cd "$SRC" && find . \( -type f -o -type l \) -printf '/%P\n' | LC_ALL=C sort)
+((${#paths[@]})) || { echo "$me: $SRC holds no files." >&2; exit 1; }
+
+problems=()
+for path in "${paths[@]}"; do
+	if [[ ! -e "$path" && ! -L "$path" ]]; then
+		problems+=("$path is in the includes but not in the chroot")
+		continue
+	fi
+	if owners="$(dpkg-query -S "$path" 2>/dev/null)"; then
+		owners="${owners%%: *}"
+		for pkg in ${owners//,/ }; do
+			[[ "$removed" == *" $pkg "* ]] \
+				|| problems+=("$path belongs to $pkg, which stays on installed systems; ship this change in a NimbusOS package instead")
+		done
+	fi
+done
+if ((${#problems[@]})); then
+	printf '%s: %s\n' "$me" "${problems[@]}" >&2
+	exit 1
+fi
+
+mkdir -p "$(dirname "$LIST")"
+{
+	echo "# Live-session-only files, removed from installed systems by"
+	echo "# /usr/lib/nimbusos-live/target-cleanup (written by hook $me)."
+	printf '%s\n' "${paths[@]}" "$LIST"
+} >"$LIST.tmp"
+chmod 0644 "$LIST.tmp"
+mv -f "$LIST.tmp" "$LIST"
+echo "$me: listed ${#paths[@]} live-session files in $LIST"

@@ -20,10 +20,18 @@
 #         services             enabled: display manager (SDDM), network,
 #                              Docker, libvirt, Samba, WS-Discovery, Avahi,
 #                              updates, the Control Center and its timers,
-#                              the live-only Docker tmpfs; nmbd disabled
+#                              the live-only Docker and containerd tmpfs;
+#                              nmbd disabled
 #         boot-splash          Plymouth theme nimbusos (NOTE-56)
 #         desktop-theme        desktop-base's desktop-theme is NimbusOS
 #         sddm-theme           SDDM uses the "nimbus" theme
+#         installer            Calamares: nimbusos branding, NimbusOS steps
+#                              in the right order, users.conf groups and
+#                              host name, EFI id = GRUB_DISTRIBUTOR,
+#                              Calamares removed from installed systems,
+#                              SDDM only (NOTE-63)
+#         live-files           the live-only file list for target-cleanup
+#         installer-launcher   "Install NimbusOS" present, Debian's hidden
 #         flathub              the Flathub remote and its stamp (hook 0100)
 #         apt-sources          NimbusOS source with its keyring, pinning
 #         tokens               no unfilled build token in a NimbusOS file
@@ -44,7 +52,7 @@ ENABLED_UNITS="display-manager.service NetworkManager.service docker.service con
 libvirtd.service smbd.service wsdd2.service avahi-daemon.service unattended-upgrades.service
 apt-daily-upgrade.timer nimbus-update-check.timer nimbus-update-auto.timer nimbus-flathub-setup.service
 nimbus-control.service nimbus-privd.socket nimbus-snapraid-sync.timer nimbus-recycle-clean.timer
-var-lib-docker.mount"
+var-lib-docker.mount var-lib-containerd.mount"
 
 failures=0
 ok()   { printf '  ok    %s\n' "$1"; }
@@ -210,6 +218,109 @@ for f in /etc/apt/preferences.d/nimbusos.pref /etc/apt/preferences.d/nimbusos-do
 	[[ -f "$f" ]] || p+=("$f is missing;")
 done
 report apt-sources "${p[@]}"
+
+# --- installer and live session (deliverable 7) -----------------------------------------------
+mapfile -t p < <(python3 - 2>&1 <<'EOF' || echo "the installer check itself failed (is python3-yaml installed?)"
+import os, re, yaml
+
+problems = []
+def load(path):
+    try:
+        with open(path) as f:
+            return yaml.safe_load(f) or {}
+    except FileNotFoundError:
+        problems.append(f"{path} is missing;")
+    except yaml.YAMLError as e:
+        problems.append(f"{path} is not valid YAML ({' '.join(str(e).split())});")
+    return None
+
+M = "/etc/calamares/modules"
+s = load("/etc/calamares/settings.conf")
+if s is not None:
+    branding = s.get("branding")
+    if branding != "@NIMBUS_ID@":
+        problems.append(f"settings.conf uses branding {branding!r}, not @NIMBUS_ID@;")
+    elif not os.path.isfile(f"/usr/share/calamares/branding/{branding}/branding.desc"):
+        problems.append(f"/usr/share/calamares/branding/{branding}/branding.desc is missing;")
+    steps = [m for block in s.get("sequence", []) for kind, mods in block.items() if kind == "exec" for m in mods]
+    order = ["packages", "shellprocess@nimbus-sources-final", "shellprocess@nimbus-target-cleanup", "umount"]
+    missing = [m for m in order if m not in steps]
+    if missing:
+        problems.append(f"settings.conf does not run {', '.join(missing)};")
+    elif [steps.index(m) for m in order] != sorted(steps.index(m) for m in order):
+        problems.append("settings.conf must run packages, nimbus-sources-final, nimbus-target-cleanup, umount in that order;")
+    if "sources-final" in steps:
+        problems.append("settings.conf still runs Debian's sources-final;")
+    for inst in s.get("instances", []):
+        if not os.path.isfile(f"{M}/{inst.get('config')}"):
+            problems.append(f"{M}/{inst.get('config')} (instance {inst.get('id')}) is missing;")
+
+u = load(f"{M}/users.conf")
+if u is not None:
+    groups = {}
+    for g in u.get("defaultGroups", []):
+        if isinstance(g, dict):
+            groups[g.get("name")] = bool(g.get("must_exist"))
+        else:
+            groups[str(g)] = False
+    for g in "@NIMBUS_USER_EXTRA_GROUPS@".split():
+        if not groups.get(g):
+            problems.append(f"users.conf does not add new users to {g} (with must_exist);")
+    if u.get("hostname", {}).get("template") != "@NIMBUS_HOSTNAME@":
+        problems.append("users.conf hostname template is not @NIMBUS_HOSTNAME@;")
+
+b = load(f"{M}/bootloader.conf")
+if b is not None:
+    distributor = ""
+    try:
+        for line in open("/etc/default/grub.d/10-nimbusos.cfg"):
+            m = re.match(r'\s*GRUB_DISTRIBUTOR=["\']?([^"\'\s]+)', line)
+            if m:
+                distributor = m.group(1).lower()
+    except FileNotFoundError:
+        problems.append("/etc/default/grub.d/10-nimbusos.cfg is missing;")
+    if b.get("efiBootloaderId") != distributor:
+        problems.append(f"bootloader.conf efiBootloaderId {b.get('efiBootloaderId')!r} differs from GRUB_DISTRIBUTOR ({distributor!r});")
+
+pk = load(f"{M}/packages.conf")
+if pk is not None:
+    gone = {str(n) for op in pk.get("operations", []) for k in ("remove", "try_remove") for n in op.get(k, [])}
+    for need in ("calamares", "calamares-settings-debian", "live-boot", "live-config"):
+        if need not in gone:
+            problems.append(f"packages.conf does not remove {need};")
+
+d = load(f"{M}/displaymanager.conf")
+if d is not None and d.get("displaymanagers") != ["sddm"]:
+    problems.append("displaymanager.conf does not configure SDDM only;")
+
+print("\n".join(problems))
+EOF
+)
+mapfile -t p < <(printf '%s\n' "${p[@]}" | grep -v '^$' || true)
+report installer "${p[@]}"
+
+p=()
+LIVE_LIST=/usr/lib/nimbusos-live/live-files
+if [[ -f "$LIVE_LIST" ]]; then
+	for need in /etc/systemd/system/var-lib-docker.mount /etc/systemd/system/var-lib-containerd.mount \
+		/usr/share/applications/nimbus-install.desktop "$LIVE_LIST"; do
+		grep -qxF "$need" "$LIVE_LIST" || p+=("$need is not listed;")
+	done
+	while IFS= read -r f; do
+		[[ -e "$f" || -L "$f" ]] || p+=("$f is listed but missing;")
+	done < <(grep '^/' "$LIVE_LIST")
+else
+	p+=("$LIVE_LIST is missing (hook 0400)")
+fi
+report live-files "${p[@]}"
+
+p=()
+[[ -f /usr/share/applications/nimbus-install.desktop ]] || p+=("nimbus-install.desktop is missing;")
+grep -qsx 'NoDisplay=true' /usr/share/applications/calamares-install-debian.desktop \
+	|| p+=("Debian's \"Install Debian\" entry is not hidden (hook 0200);")
+grep -qsx 'Hidden=true' /etc/xdg/autostart/calamares-desktop-icon.desktop \
+	|| p+=("Debian's desktop-icon autostart is not hidden (hook 0200)")
+report installer-launcher "${p[@]}"
 
 # --- leftovers ------------------------------------------------------------------------------
 found=()
