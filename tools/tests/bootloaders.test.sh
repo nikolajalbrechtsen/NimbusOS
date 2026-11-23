@@ -106,6 +106,12 @@ while read -r font; do
 	check "theme.cfg font exists: $font" test -s "binary$font"
 done < <(sed -n 's/^loadfont \(.*\)$/\1/p' "$G/theme.cfg")
 check "theme.cfg loads three fonts" test "$(grep -c '^loadfont ' "$G/theme.cfg")" = 3
+# gfxterm needs a terminal font of at least 40x12 cells (GRUB 2.12); the
+# 28-point title font gives about 26 columns at 800x600 (NOTE-72).
+check "theme.cfg sets gfxterm_font to Inter Regular 16, a font the theme uses" \
+	sh -c 'grep -qx "set gfxterm_font=\"Inter Regular 16\"" "$1" && grep -qF "\"Inter Regular 16\"" "$2"' _ "$G/theme.cfg" "$G/live-theme/theme.txt"
+check "theme.cfg loads the 16-point regular font last" \
+	test "$(sed -n 's/^loadfont .*\/\(.*\)$/\1/p' "$G/theme.cfg" | tail -n 1)" = inter-regular-16.pf2
 check "the nimbusos theme is on the medium" test -s "$G/live-theme/theme.txt" -a -s "$G/live-theme/background.png"
 
 echo "ISOLINUX (BIOS)"
