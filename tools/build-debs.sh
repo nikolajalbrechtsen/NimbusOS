@@ -150,7 +150,7 @@ make_test_key() {
 # Staging
 # -----------------------------------------------------------------------------
 stage_package() {
-	local pkg="$1" src dst
+	local pkg="$1" src dst key
 	src="$NIMBUS_REPO_ROOT/packages/$pkg"
 	dst="$staging/$pkg"
 	[[ -f "$src/debian/control" ]] || die "packages/$pkg/debian/control is missing; cannot build $pkg."
@@ -161,9 +161,15 @@ stage_package() {
 
 	case "$pkg" in
 		nimbusos-archive-keyring)
-			# keys/*.asc came with the copy above; add the throwaway key if
-			# one was generated.
+			# The package trusts every *.asc in NIMBUS_ARCHIVE_KEYS_DIR, the
+			# directory the checks read (by default its own keys/, which the
+			# copy above brought along; tools/test-mirror.sh points it
+			# elsewhere), plus the throwaway key if one was generated.
 			mkdir -p -- "$dst/keys"
+			rm -f -- "$dst/keys/"*.asc
+			while IFS= read -r key; do
+				install -m 0644 -- "$key" "$dst/keys/"
+			done < <(nimbus_archive_key_files)
 			if [[ -n "$test_key_file" ]]; then
 				install -m 0644 -- "$test_key_file" "$dst/keys/"
 			fi
