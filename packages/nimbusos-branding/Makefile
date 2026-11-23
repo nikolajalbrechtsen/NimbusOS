@@ -5,8 +5,10 @@
 #       text sources into build/, which debian/install ships:
 #         - Nimbus Sky wallpaper PNGs (1920x1080, 2560x1440, 3840x2160)
 #         - GRUB theme: background, logo, menu highlight, three .pf2 fonts
-#           made from Inter with grub-mkfont (names set with -n so theme.txt
-#           can refer to them exactly)
+#           made from Inter with grub-mkfont. GRUB names each font
+#           "<family> <style> <size>" from -n (the family only), the face's
+#           style and --size, which gives the names theme.txt uses: "Inter
+#           Regular 16", "Inter Bold 16", "Inter Bold 28"
 #         - Plymouth theme PNGs
 #         - the global theme with its splash logo, the wallpaper package,
 #           the hicolor "nimbusos" icon
@@ -80,15 +82,15 @@ $(B)/grub/select_c.png: art/select.svg
 
 $(B)/grub/inter-regular-16.pf2: $(INTER_REGULAR)
 	mkdir -p $(@D)
-	$(GRUB_MKFONT) --name="Inter Regular 16" --size=16 --output=$@ $<
+	$(GRUB_MKFONT) --name=Inter --size=16 --output=$@ $<
 
 $(B)/grub/inter-bold-16.pf2: $(INTER_BOLD)
 	mkdir -p $(@D)
-	$(GRUB_MKFONT) --name="Inter Bold 16" --size=16 --output=$@ $<
+	$(GRUB_MKFONT) --name=Inter --size=16 --output=$@ $<
 
 $(B)/grub/inter-bold-28.pf2: $(INTER_BOLD)
 	mkdir -p $(@D)
-	$(GRUB_MKFONT) --name="Inter Bold 28" --size=28 --output=$@ $<
+	$(GRUB_MKFONT) --name=Inter --size=28 --output=$@ $<
 
 $(B)/grub/theme.txt: grub/theme.txt
 	mkdir -p $(@D)

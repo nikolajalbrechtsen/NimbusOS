@@ -119,9 +119,21 @@ done
 
 echo "Content"
 check "no unfilled @NIMBUS_ token installed" sh -c "! dpkg -L nimbusos-branding | xargs -d '\n' grep -lIs '@NIMBUS_'"
-for font in "Inter Regular 16" "Inter Bold 16" "Inter Bold 28"; do
-	check "theme.txt uses \"$font\" and a .pf2 is named exactly that" \
-		sh -c "grep -q '\"$font\"' $G/theme.txt && grep -alF '$font' $G/*.pf2"
+# pf2_name FILE: the name GRUB matches theme.txt's fonts against, from the
+# file's NAME section (after "FILE", its length and "PFF2"; length includes
+# the terminating NUL). A substring test once passed "Inter Regular 16
+# Regular 16", which GRUB doesn't match, so the menu fell back to its own
+# monospace font (found in the QEMU test, docs/PLAN.md NOTE-72).
+pf2_name() {
+	local len
+	[[ "$(head -c 16 "$1" | tail -c 4)" == NAME ]] || return 0
+	len="$(od -An -t u1 -j 16 -N 4 "$1" | awk '{ print $1 * 16777216 + $2 * 65536 + $3 * 256 + $4 }')"
+	dd if="$1" bs=1 skip=20 count=$((len - 1)) 2>/dev/null
+}
+for pair in "inter-regular-16:Inter Regular 16" "inter-bold-16:Inter Bold 16" "inter-bold-28:Inter Bold 28"; do
+	file="$G/${pair%%:*}.pf2" font="${pair#*:}"
+	check "${pair%%:*}.pf2 is named exactly \"$font\" (got \"$(pf2_name "$file")\")" test "$(pf2_name "$file")" = "$font"
+	check "theme.txt uses \"$font\"" grep -qF "\"$font\"" "$G/theme.txt"
 done
 check "kdeglobals selects the global theme" grep -qx 'LookAndFeelPackage=org.nimbusos.desktop' /etc/xdg/kdeglobals
 check "kdeglobals carries the Nimbus Dark colours" sh -c 'grep -qx "\[Colors:View\]" /etc/xdg/kdeglobals && grep -qx "DecorationFocus=108,196,255" /etc/xdg/kdeglobals'
