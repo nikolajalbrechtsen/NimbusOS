@@ -243,7 +243,7 @@ do_serve() {
 	[[ -d "$dir/site/apt/dists" ]] || die "$dir has no repository yet. Run: $0 init"
 	command -v python3 >/dev/null 2>&1 || die "python3 is needed to serve the mirror."
 	log "Serving $dir/site on 127.0.0.1:$port. QEMU guests reach it as $NIMBUS_APT_URL/ . Stop with Ctrl+C."
-	exec python3 -m http.server "$port" --bind 127.0.0.1 --directory "$dir/site"
+	nimbus_exec python3 -m http.server "$port" --bind 127.0.0.1 --directory "$dir/site"
 }
 
 do_break() {

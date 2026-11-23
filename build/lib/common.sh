@@ -108,6 +108,15 @@ nimbus_mktemp_dir() {
 	printf -v "$1" '%s' "$_dir"
 }
 
+# nimbus_exec COMMAND [ARGS...] — remove this script's temporary directories,
+# then replace the script with COMMAND (exec skips the EXIT trap). Signals
+# sent to the script then reach COMMAND itself.
+nimbus_exec() {
+	_nimbus_cleanup
+	_NIMBUS_TMPDIRS=()
+	exec "$@"
+}
+
 # -----------------------------------------------------------------------------
 # Paths and git
 # -----------------------------------------------------------------------------

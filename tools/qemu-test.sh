@@ -125,7 +125,7 @@ nested_state() {   # prints on, off or unknown
 }
 
 main() {
-	local sys_index cd_index vars_src vars name serial machine d rc=0
+	local sys_index cd_index vars_src vars name serial machine d
 	local -a qemu
 
 	while (($#)); do
@@ -277,9 +277,7 @@ main() {
 
 	log "Starting ${NIMBUS_NAME} in QEMU ($firmware${secure_boot:+, Secure Boot}). SMB: smbclient -p $smb_port //127.0.0.1/<share> -U <user>"
 	print_command "${qemu[@]}" >&2
-	# Not exec: this shell removes its temporary files when QEMU exits.
-	"${qemu[@]}" || rc=$?
-	exit "$rc"
+	nimbus_exec "${qemu[@]}"
 }
 
 main "$@"
