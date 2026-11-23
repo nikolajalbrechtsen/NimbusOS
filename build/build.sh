@@ -153,8 +153,10 @@ main() {
 	nimbus_check_host
 	# apt-utils: live-build only Recommends it, but its binary_package-lists
 	# runs apt-ftparchive on the host to index the ISO's package pool.
+	# zstd: initramfs-tools-core only Recommends it, but Trixie's initramfs
+	# images are zstd-compressed, and the image check lists them.
 	nimbus_apt_install_missing live-build debootstrap devscripts dpkg-dev debhelper \
-		gpg gpgv curl ca-certificates git squashfs-tools xz-utils initramfs-tools-core apt-utils
+		gpg gpgv curl ca-certificates git squashfs-tools xz-utils initramfs-tools-core apt-utils zstd
 	export LC_ALL=C.UTF-8
 
 	work="$(nimbus_path "$NIMBUS_WORK_DIR")"

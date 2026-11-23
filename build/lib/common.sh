@@ -494,10 +494,12 @@ nimbus_prepare_grub_theme() {
 # live-build regenerates the initramfs after the hooks (chroot_hacks), so
 # this checks its result instead of a hook of its own (docs/PLAN.md NOTE-62).
 nimbus_check_image_initrd() {
-	local initrd="$1" listing path
+	local initrd="$1" listing path tmp
 	local -a problems=()
 	[[ -s "$initrd" ]] || die "image initrd check: $initrd is missing or empty."
-	listing="$(lsinitramfs "$initrd" 2>/dev/null)" || die "image initrd check: lsinitramfs cannot read $initrd."
+	nimbus_mktemp_dir tmp
+	listing="$(lsinitramfs "$initrd" 2>"$tmp/err")" \
+		|| die "image initrd check: lsinitramfs cannot read $initrd: $(tail -n 3 "$tmp/err" | tr '\n' ' ')(Trixie's initramfs is zstd-compressed: is zstd installed?)"
 	for path in nimbusos.plymouth nimbusos.script logo.png progress-bar.png; do
 		grep -qE "(^|/)usr/share/plymouth/themes/nimbusos/${path//./\\.}\$" <<<"$listing" \
 			|| problems+=("usr/share/plymouth/themes/nimbusos/$path is not in the initramfs")
