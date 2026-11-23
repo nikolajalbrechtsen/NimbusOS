@@ -274,10 +274,13 @@ def beta_sources_text():
 
 # Order matters: the first matching class wins. apt 3 (Trixie) reports
 # signature problems through sqv ("OpenPGP signature verification failed",
-# "Missing key"); older wording (NO_PUBKEY, BADSIG) is kept as well.
+# "Missing key", and for a changed file "Message has been manipulated"; any
+# error sqv returns is a signature problem); older wording (NO_PUBKEY,
+# BADSIG) is kept as well.
 ERROR_CLASSES = (
     ("signature", re.compile(
         r"OpenPGP signature verification failed|Missing key|NO_PUBKEY|BADSIG|EXPKEYSIG|REVKEYSIG"
+        r"|/sqv returned an error code|Message has been manipulated"
         r"|signatures were invalid|signatures couldn't be verified|is not signed|not bound", re.I)),
     ("expired", re.compile(r"\bis expired\b|is not valid yet|invalid since", re.I)),
     ("tls", re.compile(

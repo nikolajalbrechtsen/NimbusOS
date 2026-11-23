@@ -7,7 +7,8 @@
 #                   pins (tools/pin-actions.sh --check)
 #         unit      pytest (Control Center and nimbus-update) and the tests
 #                   that need no packages: version mapping, Docker archive
-#                   files, the image APT check, APT publishing, ISO splitting
+#                   files, the image APT check, APT publishing, ISO splitting,
+#                   the test mirror
 #         debs      all seven .debs with tools/build-debs.sh and lintian, with
 #                   a throwaway signing key, since packages from CI are never
 #                   published (docs/PLAN.md NOTE-44)
@@ -95,6 +96,8 @@ jobs:
         run: tools/tests/publish-apt.test.sh
       - name: ISO splitting
         run: tools/tests/split-iso.test.sh
+      - name: Test mirror (broken and repaired signatures)
+        run: tools/tests/test-mirror.test.sh
 
   debs:
     name: build the packages

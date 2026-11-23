@@ -120,9 +120,24 @@ in_container() {
 	[[ -f /.dockerenv || -f /run/.containerenv ]]
 }
 
+# need_tools: what publish-apt.sh and the key handling need. Installed when
+# running as root (tools/dev-shell.sh), otherwise only checked.
+need_tools() {
+	local -a pkgs=(gpg gpg-agent gpgv apt-utils dpkg-dev xz-utils python3)
+	if [[ "$(id -u)" -eq 0 ]] && command -v apt-get >/dev/null 2>&1; then
+		nimbus_apt_install_missing "${pkgs[@]}"
+		return 0
+	fi
+	local cmd
+	for cmd in gpg gpgv apt-ftparchive dpkg-scanpackages xz python3; do
+		command -v "$cmd" >/dev/null 2>&1 || die "$cmd is not installed. Install: ${pkgs[*]} (or run this in tools/dev-shell.sh)."
+	done
+}
+
 # --- commands -------------------------------------------------------------------
 do_init() {
 	local tmp
+	need_tools
 	mkdir -p -- "$dir"
 	# Belt and braces: nothing in here may ever be committed (dist/ is
 	# ignored too).
@@ -157,6 +172,7 @@ do_publish() {
 	local tag="${1:?publish needs a release tag, for example v0.1.0}" notes commit
 	local -a deps=()
 	check_tag "$tag"
+	need_tools
 	use_key
 	if [[ "$(id -u)" -eq 0 ]]; then
 		deps=(--install-build-deps)
@@ -240,6 +256,7 @@ do_break() {
 }
 
 do_repair() {
+	need_tools
 	use_key
 	"$NIMBUS_REPO_ROOT/tools/publish-apt.sh" resign --site "$dir/site" --key "$fpr"
 	"$NIMBUS_REPO_ROOT/tools/publish-apt.sh" check --site "$dir/site"
@@ -273,7 +290,7 @@ main() {
 		serve)           (($# == 0)) || die "serve takes no arguments."; do_serve ;;
 		break-signature) (($# <= 1)) || die "break-signature takes at most one suite."; do_break "${1:-}" ;;
 		repair)          (($# == 0)) || die "repair takes no arguments."; do_repair ;;
-		check)           (($# == 0)) || die "check takes no arguments."; "$NIMBUS_REPO_ROOT/tools/publish-apt.sh" check --site "$dir/site" ;;
+		check)           (($# == 0)) || die "check takes no arguments."; need_tools; "$NIMBUS_REPO_ROOT/tools/publish-apt.sh" check --site "$dir/site" ;;
 		env)             (($# == 0)) || die "env takes no arguments."; print_env ;;
 		*) die "Unknown command: $cmd (see --help)" ;;
 	esac

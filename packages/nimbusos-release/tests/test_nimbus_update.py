@@ -80,6 +80,21 @@ E: The repository 'https://{NIMBUS_HOST}/NimbusOS/apt stable InRelease' is not s
     assert "nimbusos-archive-keyring" in errors[0]["hint"]
 
 
+def test_changed_inrelease_is_one_signature_error(nu):
+    # apt 3's real output for an InRelease whose signed text was changed
+    # (tools/tests/test-mirror.test.sh, smoke test 10). The Err block names
+    # only sqv's verdict; it once became a second, vague "other" error.
+    errors = classify(nu, f"""\
+Get:2 https://{NIMBUS_HOST}/NimbusOS/apt stable InRelease [1455 B]
+Err:2 https://{NIMBUS_HOST}/NimbusOS/apt stable InRelease
+  Sub-process /usr/bin/sqv returned an error code (1), error message is: Verifying signature:            Message has been manipulated
+Reading package lists...
+W: OpenPGP signature verification failed: https://{NIMBUS_HOST}/NimbusOS/apt stable InRelease: Sub-process /usr/bin/sqv returned an error code (1), error message is: Verifying signature:            Message has been manipulated
+E: The repository 'https://{NIMBUS_HOST}/NimbusOS/apt stable InRelease' is not signed.
+""")  # noqa: E501 (apt's own lines, as apt prints them)
+    assert [(e["source"], e["kind"]) for e in errors] == [("nimbusos", "signature")]
+
+
 def test_expired_debian_metadata(nu):
     errors = classify(nu, "E: Release file for http://deb.debian.org/debian/dists/trixie/InRelease is expired "
                           "(invalid since 2d 3h 4min 5s). Updates for this repository will not be applied.\n")
