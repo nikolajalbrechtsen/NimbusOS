@@ -1,0 +1,35 @@
+#!/bin/bash
+# =============================================================================
+# build/config/hooks/live/0150-os-release.hook.chroot
+# =============================================================================
+# What: makes /etc/os-release base-files' symlink to ../usr/lib/os-release
+#       again, so the live session, and every system Calamares installs from
+#       it, identify as NimbusOS through the file nimbusos-release diverts
+#       into place. Fails the build if /usr/lib/os-release isn't NimbusOS's.
+# Why:  for live systems, live-build's bootstrap_debootstrap replaces that
+#       symlink with a copy of the bootstrap's (Debian's) os-release plus
+#       IMAGE_ID=live and BUILD_ID, under a local diversion. Its chroot_hacks
+#       removes the diversion after the hooks with --no-rename, which leaves
+#       the copy in place: /etc/os-release said "Debian GNU/Linux" in the live
+#       session and on installed systems, NimbusOS updates never reached it,
+#       and live-build's boot menus took VERSION_ID 13 from it
+#       (docs/PLAN.md NOTE-36, NOTE-72).
+# =============================================================================
+set -euo pipefail
+me="0150-os-release"
+LINK=../usr/lib/os-release
+
+[[ -f /usr/lib/os-release ]] || { echo "$me: /usr/lib/os-release is missing." >&2; exit 1; }
+# shellcheck disable=SC1091
+id="$(. /usr/lib/os-release && printf '%s' "${ID:-}")"
+[[ "$id" == "@NIMBUS_ID@" ]] \
+	|| { echo "$me: /usr/lib/os-release says ID=$id, not @NIMBUS_ID@. Is nimbusos-release installed?" >&2; exit 1; }
+
+if [[ -L /etc/os-release && "$(readlink /etc/os-release)" == "$LINK" ]]; then
+	echo "$me: /etc/os-release already points to $LINK."
+	exit 0
+fi
+rm -f /etc/os-release
+ln -s "$LINK" /etc/os-release
+# shellcheck disable=SC1091
+echo "$me: /etc/os-release -> $LINK ($(. /etc/os-release && printf '%s' "$PRETTY_NAME"))"

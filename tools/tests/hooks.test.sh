@@ -9,6 +9,10 @@
 #       bind-mounts it.
 #         0100  adds Flathub with the packaged setup, again is a no-op,
 #               leaves no file behind, fails clearly without its setup script
+#         0150  turns live-build's copy of Debian's os-release (made the way
+#               its bootstrap_debootstrap makes it) back into the symlink to
+#               NimbusOS's, which survives chroot_hacks; again is a no-op;
+#               refuses an os-release that isn't NimbusOS's
 #         0200  hides Trixie's real "Install Debian" entries (from the
 #               calamares-settings-debian package), valid per
 #               desktop-file-validate, idempotent, replaces an existing value,
@@ -118,6 +122,29 @@ mv /usr/lib/nimbusos/nimbus-flathub-setup "$WORK/setup.saved"
 check "fails clearly without nimbusos-release's setup script" \
 	sh -c '! bash "$1" >"$2" 2>&1 && grep -q "nimbus-flathub-setup is missing" "$2"' _ "$HOOKS/0100-flathub-preseed.hook.chroot" "$WORK/0100-bad.out"
 mv "$WORK/setup.saved" /usr/lib/nimbusos/nimbus-flathub-setup
+
+# --- 0150 ------------------------------------------------------------------------------------
+echo "0150-os-release"
+# What live-build's bootstrap_debootstrap does for a live system: a local
+# diversion, and a copy of the bootstrap's os-release with two extra fields.
+dpkg-divert --quiet --local --add --no-rename --divert /etc/os-release.debootstrap /etc/os-release
+rm -f /etc/os-release
+cp /usr/lib/os-release.debian /etc/os-release
+printf 'IMAGE_ID=live\nBUILD_ID=20261123T000000Z\n' >>/etc/os-release
+check "live-build's copy says Debian before the hook" grep -qx 'ID=debian' /etc/os-release
+check "runs" run_hook 0150-os-release
+check "/etc/os-release is the symlink to ../usr/lib/os-release" \
+	test "$(readlink /etc/os-release)" = ../usr/lib/os-release
+check "/etc/os-release now says ${NIMBUS_ID}" sh -c '. /etc/os-release && test "$ID" = "$1"' _ "$NIMBUS_ID"
+# What chroot_hacks does after the hooks.
+dpkg-divert --quiet --local --remove --no-rename /etc/os-release
+check "chroot_hacks' --remove --no-rename keeps the symlink" test -L /etc/os-release
+check "a second run is a no-op" sh -c 'bash "$1" | grep -q "already points"' _ "$HOOKS/0150-os-release.hook.chroot"
+cp -p /usr/lib/os-release "$WORK/os-release.saved"
+sed -i 's/^ID=.*/ID=debian/' /usr/lib/os-release
+check "refuses to link to an os-release that isn't NimbusOS's" \
+	sh -c '! bash "$1" >"$2" 2>&1 && grep -q "says ID=debian" "$2"' _ "$HOOKS/0150-os-release.hook.chroot" "$WORK/0150-bad.out"
+cp -p "$WORK/os-release.saved" /usr/lib/os-release
 
 # --- 0200 ------------------------------------------------------------------------------------
 echo "0200-live-installer-launcher"
@@ -231,6 +258,11 @@ cp -p /usr/lib/os-release "$WORK/os-release.saved"
 sed -i 's/^ID=.*/ID=debian/' /usr/lib/os-release
 check "os-release with ID=debian" expect_fail os-release "ID=debian (want nimbusos)"
 cp -p "$WORK/os-release.saved" /usr/lib/os-release
+rm /etc/os-release
+cp /usr/lib/os-release.debian /etc/os-release
+check "/etc/os-release a copy of Debian's (live-build's)" expect_fail os-release "/etc/os-release is not the symlink"
+rm /etc/os-release
+ln -s ../usr/lib/os-release /etc/os-release
 
 gpasswd -d nimbus-control libvirt >/dev/null
 check "nimbus-control not in libvirt" expect_fail nimbus-control-user "not in group(s): libvirt"

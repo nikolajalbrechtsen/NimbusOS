@@ -7,7 +7,8 @@
 #       line ("ok", "FAIL" with the reason, or "warn"), so one build shows
 #       every problem at once:
 #         os-release           /usr/lib/os-release says NimbusOS on trixie,
-#                              with ID_LIKE=debian (NOTE-36)
+#                              with ID_LIKE=debian, and /etc/os-release links to
+#                              it (hook 0150; NOTE-36, NOTE-72)
 #         nimbusos-packages    all seven NimbusOS packages, one version
 #         package-lists        every package in config/package-lists/
 #                              *.list.chroot is installed
@@ -68,8 +69,8 @@ installed() { [[ "$(dpkg-query -W -f='${db:Status-Abbrev}' "$1" 2>/dev/null)" ==
 echo "0900-verify-image: checking the image"
 
 # --- os-release ------------------------------------------------------------------
-# (/etc/os-release is not checked: live-build keeps it diverted until after
-# the hooks, see chroot_hacks.)
+# /etc/os-release must be base-files' symlink again (hook 0150): live-build
+# leaves a copy of Debian's there otherwise, and Calamares installs it.
 p=()
 if [[ -f /usr/lib/os-release ]]; then
 	# shellcheck disable=SC1091
@@ -85,7 +86,10 @@ else
 	p+=("/usr/lib/os-release is missing;")
 fi
 diversion="$(dpkg-divert --list /usr/lib/os-release)"
-[[ "$diversion" == *nimbusos-release* ]] || p+=("base-files' os-release is not diverted by nimbusos-release")
+[[ "$diversion" == *nimbusos-release* ]] || p+=("base-files' os-release is not diverted by nimbusos-release;")
+if [[ ! -L /etc/os-release || "$(readlink /etc/os-release)" != ../usr/lib/os-release ]]; then
+	p+=("/etc/os-release is not the symlink to ../usr/lib/os-release (hook 0150)")
+fi
 report os-release "${p[@]}"
 
 # --- NimbusOS packages --------------------------------------------------------------
