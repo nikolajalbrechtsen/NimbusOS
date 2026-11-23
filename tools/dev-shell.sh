@@ -29,6 +29,11 @@
 #   --privileged   run privileged; needed for build/build.sh (live-build
 #                  mounts /proc, /sys and /dev/pts inside its chroot)
 #   --mount        run in the mounted checkout instead of a clone
+#   --work-volume NAME
+#                  keep build/build.sh's working tree, including live-build's
+#                  package cache, in the container volume NAME between runs
+#                  (NIMBUS_WORK_DIR=/var/lib/nimbus-work), so a rebuild
+#                  doesn't download every package again
 #   --no-setup     do not install the developer tools first
 #   --engine NAME  docker or podman (default: docker if it works, else podman)
 #   -h, --help     show this help
@@ -95,8 +100,8 @@ run_inside() {
 
 # --- On the host ------------------------------------------------------------
 run_host() {
-	local engine="$1" privileged="$2" setup="$3" mode="$4" var
-	shift 4
+	local engine="$1" privileged="$2" setup="$3" mode="$4" work_volume="$5" var
+	shift 5
 	local -a global=() args=()
 
 	if [[ -z "$engine" ]]; then
@@ -138,6 +143,10 @@ run_host() {
 	if [[ "$privileged" == 1 ]]; then
 		args+=(--privileged)
 	fi
+	if [[ -n "$work_volume" ]]; then
+		args+=(--volume "$work_volume:/var/lib/nimbus-work")
+		printenv NIMBUS_WORK_DIR >/dev/null || args+=(--env NIMBUS_WORK_DIR=/var/lib/nimbus-work)
+	fi
 	for var in $(compgen -e); do
 		if [[ "$var" == NIMBUS_* ]]; then
 			args+=(--env "$var=${!var}")
@@ -154,7 +163,7 @@ run_host() {
 }
 
 main() {
-	local engine="" privileged=0 setup=1 mode=clone
+	local engine="" privileged=0 setup=1 mode=clone work_volume=""
 
 	if [[ "${1:-}" == --inside ]]; then
 		[[ $# -ge 4 && "$4" == -- ]] || die "internal: bad --inside call"
@@ -167,6 +176,7 @@ main() {
 		case "$1" in
 			--privileged) privileged=1; shift ;;
 			--mount)      mode=mount; shift ;;
+			--work-volume) [[ $# -ge 2 ]] || die "--work-volume needs a name"; work_volume="$2"; shift 2 ;;
 			--no-setup)   setup=0; shift ;;
 			--engine)     [[ $# -ge 2 ]] || die "--engine needs a value"; engine="$2"; shift 2 ;;
 			-h|--help)    usage; exit 0 ;;
@@ -175,8 +185,11 @@ main() {
 		esac
 	done
 
+	if [[ -n "$work_volume" && ! "$work_volume" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]*$ ]]; then
+		die "--work-volume takes a volume name (letters, digits, '_', '.', '-'), not a path: $work_volume"
+	fi
 	nimbus_load_conf
-	run_host "$engine" "$privileged" "$setup" "$mode" "$@"
+	run_host "$engine" "$privileged" "$setup" "$mode" "$work_volume" "$@"
 }
 
 main "$@"
