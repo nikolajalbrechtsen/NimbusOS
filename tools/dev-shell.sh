@@ -60,6 +60,12 @@ prepare_clone() {
 	local patch=/tmp/nimbus-worktree.patch f
 	local -a untracked
 	log "Cloning /src to /work"
+	# A local clone runs git upload-pack in /src, and git clears GIT_CONFIG_*
+	# from the environment for it, so the safe.directory passed in by
+	# run_host doesn't reach it. With rootful Podman or Docker the checkout's
+	# owner differs from root here, and git would refuse. This container's
+	# own (throwaway) global config trusts it instead.
+	git config --global --add safe.directory /src
 	git clone -q /src /work
 	git -C /src diff HEAD --binary >"$patch"
 	if [[ -s "$patch" ]]; then
@@ -124,11 +130,7 @@ run_host() {
 
 	args=(run --rm --hostname nimbusos-dev
 		# The checkout belongs to another uid inside the container; trust it.
-		# Cloning it runs git upload-pack in /src/.git, which git checks
-		# separately (seen with rootful Podman, where the uids differ).
-		--env GIT_CONFIG_COUNT=2
-		--env GIT_CONFIG_KEY_0=safe.directory --env GIT_CONFIG_VALUE_0=/src
-		--env GIT_CONFIG_KEY_1=safe.directory --env GIT_CONFIG_VALUE_1=/src/.git)
+		--env GIT_CONFIG_COUNT=1 --env GIT_CONFIG_KEY_0=safe.directory --env GIT_CONFIG_VALUE_0=/src)
 	if [[ "$mode" == clone ]]; then
 		mkdir -p -- "$NIMBUS_REPO_ROOT/dist" "$NIMBUS_REPO_ROOT/_build/debs"
 		args+=(--volume "$NIMBUS_REPO_ROOT:/src:ro,z" --workdir /
