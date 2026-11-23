@@ -13,7 +13,8 @@
 #                   published (docs/PLAN.md NOTE-44)
 #         packages  each package and integration test in its own fresh
 #                   container (they install packages and need a clean
-#                   system); NAS, VM and Docker tests privileged
+#                   system); NAS, VM and Docker tests privileged. A failing
+#                   test's error lines become annotations on the run
 #         archive   the network checks: every listed package and live-build
 #                   flag exists in Trixie (tools/verify-trixie.sh), and
 #                   Docker still serves the committed key
@@ -185,7 +186,17 @@ jobs:
       - name: Run the test
         env:
           TEST: ${{ matrix.run }}
-        run: $TEST
+        run: |
+          set +e
+          $TEST 2>&1 | tee "$RUNNER_TEMP/test.log"
+          status=${PIPESTATUS[0]}
+          if ((status != 0)); then
+            # The failing lines become annotations, so the run's summary page
+            # says why without opening the log.
+            grep -E 'FAIL|ERROR|Error|error:|Traceback|^E  ' "$RUNNER_TEMP/test.log" | tail -n 10 \
+              | while IFS= read -r line; do line="${line//%/%25}"; echo "::error::${line}"; done
+          fi
+          exit "$status"
 
   archive:
     name: Trixie and Docker (network)
