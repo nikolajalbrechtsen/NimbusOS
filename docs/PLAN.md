@@ -136,16 +136,19 @@ NimbusOS/
 │   ├── lint.sh                       shellcheck, ruff, node --check, JSON/YAML, file modes, Docker key (ci.yml's lint job)
 │   ├── import-signing-key.sh         loads the APT_SIGNING_KEY secret in a job; refuses a key that isn't committed
 │   ├── pin-actions.sh                resolves each action's release tag to its commit SHA (NOTE-42)
-│   ├── publish-apt.sh                apt-ftparchive repository on gh-pages: init, add (prune to 3), resign, check (NOTE-52)
+│   ├── publish-apt.sh                apt-ftparchive repository on gh-pages: init, add (prune to 3), resign, check, reindex (NOTE-52)
 │   ├── releases-json.py              maintains releases.json next to the repository (NOTE-37)
 │   ├── split-iso.sh                  splits ISOs over the GitHub asset limit; writes join instructions
 │   ├── qemu-test.sh                  the UEFI/BIOS QEMU test commands from docs/TESTING.md
+│   ├── test-mirror.sh                a throwaway key and a local APT repository for the QEMU test: publish, iso, serve,
+│   │                                 break-signature, plant (NOTE-72)
 │   └── tests/
 │       ├── deb-version.test.sh       version mapping (real dpkg; 40 checks)
 │       ├── image-apt-check.test.sh   final-image APT check: good image + 6 failure modes
 │       ├── docker-archive.test.sh    fetch-docker-key.sh --verify-local: real files + 8 breakages
 │       ├── publish-apt.test.sh       pruning (dpkg order, ~beta), signing, re-signing, by-hash, with a real apt client
 │       ├── split-iso.test.sh         ISO parts, SHA256SUMS, join instructions
+│       ├── test-mirror.test.sh       the test mirror with a real apt client: broken and repaired signatures, a planted package
 │       ├── hooks.test.sh             the live-build hooks in a container standing in for the chroot
 │       ├── live-files.test.sh        the installer configuration and live-only scripts (sources, cleanup)
 │       ├── bootloaders.test.sh       the live boot menus, made by live-build's own scripts
@@ -155,7 +158,7 @@ NimbusOS/
     ├── PLAN.md                       this file
     ├── RELEASING.md                  one-time GitHub setup, stable/beta releases, rollback
     ├── SIGNING.md                    offline ed25519 key, secrets, key rotation
-    ├── TESTING.md                    QEMU commands + smoke-test checklist
+    ├── TESTING.md                    QEMU commands, the test mirror, the smoke-test checklist
     └── release-notes/v0.1.0.md       release notes = GitHub Release body = releases.json notes (NOTE-37)
 ```
 
