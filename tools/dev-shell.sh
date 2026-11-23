@@ -124,7 +124,11 @@ run_host() {
 
 	args=(run --rm --hostname nimbusos-dev
 		# The checkout belongs to another uid inside the container; trust it.
-		--env GIT_CONFIG_COUNT=1 --env GIT_CONFIG_KEY_0=safe.directory --env GIT_CONFIG_VALUE_0=/src)
+		# Cloning it runs git upload-pack in /src/.git, which git checks
+		# separately (seen with rootful Podman, where the uids differ).
+		--env GIT_CONFIG_COUNT=2
+		--env GIT_CONFIG_KEY_0=safe.directory --env GIT_CONFIG_VALUE_0=/src
+		--env GIT_CONFIG_KEY_1=safe.directory --env GIT_CONFIG_VALUE_1=/src/.git)
 	if [[ "$mode" == clone ]]; then
 		mkdir -p -- "$NIMBUS_REPO_ROOT/dist" "$NIMBUS_REPO_ROOT/_build/debs"
 		args+=(--volume "$NIMBUS_REPO_ROOT:/src:ro,z" --workdir /
