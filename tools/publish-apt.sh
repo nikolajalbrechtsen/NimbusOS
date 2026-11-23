@@ -28,6 +28,9 @@
 #                 index matches its Release checksum, and every package an
 #                 index lists is in the pool with that checksum
 #         prune   prune one pool directory (used by add; exposed for the test)
+#         reindex rebuild and sign one suite's indexes from its pool as it is.
+#                 Releases only ever go in with add; this is for
+#                 tools/test-mirror.sh, which plants test packages
 #       Release files carry Origin and Label NIMBUS_APT_ORIGIN, Valid-Until
 #       NIMBUS_APT_VALID_DAYS after signing, and Acquire-By-Hash: index files
 #       are also kept under by-hash/ (the current and the previous ones), so a
@@ -43,6 +46,7 @@
 #        tools/publish-apt.sh resign --site DIR --key FPR [--public-key FILE]
 #        tools/publish-apt.sh check  --site DIR [--public-key FILE]
 #        tools/publish-apt.sh prune  --pool DIR --keep N
+#        tools/publish-apt.sh reindex --site DIR --key FPR --suite SUITE [--public-key FILE]
 #   --public-key FILE  the public key(s) clients trust; default: the committed
 #                      keys in NIMBUS_ARCHIVE_KEYS_DIR. --key must be one of them.
 #   Needs apt-utils, dpkg-dev, xz-utils, gpg, gpgv and python3 (Debian 13).
@@ -60,7 +64,7 @@ usage() {
 cmd="${1:-}"
 [[ -n "$cmd" && "$cmd" != -* ]] || { usage >&2; exit 2; }
 shift
-site="" signing_key="" tag="" debs="" notes="" public_key="" pool="" keep=""
+site="" signing_key="" tag="" debs="" notes="" public_key="" pool="" keep="" suite_opt=""
 while (($#)); do
 	case "$1" in
 		--site) site="${2:?--site needs a directory}"; shift 2 ;;
@@ -71,6 +75,7 @@ while (($#)); do
 		--public-key) public_key="${2:?--public-key needs a file}"; shift 2 ;;
 		--pool) pool="${2:?--pool needs a directory}"; shift 2 ;;
 		--keep) keep="${2:?--keep needs a number}"; shift 2 ;;
+		--suite) suite_opt="${2:?--suite needs a suite}"; shift 2 ;;
 		-h|--help) usage; exit 0 ;;
 		*) die "Unknown option: $1 (see --help)" ;;
 	esac
@@ -306,6 +311,15 @@ do_resign() {
 	((resigned)) || die "Nothing to re-sign in $REPO. Create the repository first: tools/publish-apt.sh init."
 }
 
+do_reindex() {
+	check_signing_key
+	[[ -n "$suite_opt" ]] || die "reindex needs --suite."
+	[[ " $NIMBUS_APT_SUITES " == *" $suite_opt "* ]] || die "--suite must be one of: $NIMBUS_APT_SUITES"
+	[[ -f "$REPO/dists/$suite_opt/Release" ]] || die "Suite $suite_opt doesn't exist in $REPO yet; run init first."
+	index_suite "$suite_opt"
+	write_extras
+}
+
 do_check() {
 	local suite d bin issues=0 valid_until name sum file
 	for suite in $NIMBUS_APT_SUITES; do
@@ -348,5 +362,6 @@ case "$cmd" in
 	add) do_add ;;
 	resign) do_resign ;;
 	check) do_check ;;
-	*) die "Unknown command: $cmd (init, add, resign, check or prune)" ;;
+	reindex) do_reindex ;;
+	*) die "Unknown command: $cmd (init, add, resign, check, reindex or prune)" ;;
 esac

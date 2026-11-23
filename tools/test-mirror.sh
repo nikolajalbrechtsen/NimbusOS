@@ -41,6 +41,13 @@
 #                           dists/SUITE/InRelease (default stable), so its
 #                           signature no longer matches (smoke test 10)
 #         repair            sign every suite again (undoes break-signature)
+#         plant NAME VERSION [SUITE]
+#                           put a fake package NAME VERSION into SUITE (default
+#                           stable), as a compromised repository might; the
+#                           pinning must keep apt on Debian's NAME (smoke
+#                           test 9). NimbusOS's own package names are refused
+#         unplant NAME [SUITE]
+#                           remove it again
 #         check             what a client checks (tools/publish-apt.sh check)
 #         env               print the NIMBUS_* settings that point a build at
 #                           this mirror, for: eval "$(tools/test-mirror.sh env)"
@@ -255,6 +262,46 @@ do_break() {
 	log "dists/$suite/InRelease no longer matches its signature. Undo with: $0 repair"
 }
 
+check_plant_name() {
+	[[ "$1" =~ ^[a-z0-9][a-z0-9+.-]+$ ]] || die "'$1' is not a Debian package name."
+	case "$1" in
+		nimbus-*|nimbusos-*) die "$1 is one of ${NIMBUS_NAME}'s own names, which the pinning lets through on purpose. Plant a Debian package, such as bash." ;;
+	esac
+}
+
+do_plant() {
+	local name="$1" version="$2" suite="${3:-$NIMBUS_APT_DEFAULT_SUITE}" tmp
+	check_plant_name "$name"
+	[[ "$version" =~ ^[0-9][A-Za-z0-9.+~-]*$ ]] || die "'$version' is not a Debian version (no epoch)."
+	need_tools
+	use_key
+	nimbus_mktemp_dir tmp
+	mkdir -p -- "$tmp/$name/DEBIAN" "$dir/site/apt/pool/$suite/$name"
+	cat >"$tmp/$name/DEBIAN/control" <<EOF
+Package: $name
+Version: $version
+Architecture: all
+Maintainer: ${NIMBUS_NAME} test mirror <test@example.invalid>
+Description: fake $name planted by tools/test-mirror.sh
+ A stand-in for a package a compromised repository might offer. The
+ pinning in nimbusos.pref must keep apt on Debian's $name.
+EOF
+	dpkg-deb --root-owner-group --build "$tmp/$name" "$dir/site/apt/pool/$suite/$name/${name}_${version}_all.deb" >/dev/null
+	"$NIMBUS_REPO_ROOT/tools/publish-apt.sh" reindex --site "$dir/site" --key "$fpr" --suite "$suite"
+	log "Planted $name $version in $suite. In the guest: sudo apt update; apt-cache policy $name"
+}
+
+do_unplant() {
+	local name="$1" suite="${2:-$NIMBUS_APT_DEFAULT_SUITE}"
+	check_plant_name "$name"
+	[[ -d "$dir/site/apt/pool/$suite/$name" ]] || die "Nothing is planted as $name in $suite."
+	need_tools
+	use_key
+	rm -rf -- "${dir:?}/site/apt/pool/$suite/$name"
+	"$NIMBUS_REPO_ROOT/tools/publish-apt.sh" reindex --site "$dir/site" --key "$fpr" --suite "$suite"
+	log "Removed $name from $suite."
+}
+
 do_repair() {
 	need_tools
 	use_key
@@ -290,6 +337,8 @@ main() {
 		serve)           (($# == 0)) || die "serve takes no arguments."; do_serve ;;
 		break-signature) (($# <= 1)) || die "break-signature takes at most one suite."; do_break "${1:-}" ;;
 		repair)          (($# == 0)) || die "repair takes no arguments."; do_repair ;;
+		plant)           (($# == 2 || $# == 3)) || die "plant takes a package name, a version and optionally a suite."; do_plant "$@" ;;
+		unplant)         (($# == 1 || $# == 2)) || die "unplant takes a package name and optionally a suite."; do_unplant "$@" ;;
 		check)           (($# == 0)) || die "check takes no arguments."; need_tools; "$NIMBUS_REPO_ROOT/tools/publish-apt.sh" check --site "$dir/site" ;;
 		env)             (($# == 0)) || die "env takes no arguments."; print_env ;;
 		*) die "Unknown command: $cmd (see --help)" ;;

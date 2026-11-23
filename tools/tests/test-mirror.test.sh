@@ -13,7 +13,10 @@
 #           classifier calls it a "signature" error of the NimbusOS
 #           repository: what the Updates page shows (smoke test 10);
 #         - repair makes apt succeed again;
-#         - bad tags, ports and arguments are refused.
+#         - plant puts a fake bash 99.0 into the mirror: with Debian's bash
+#           installed and the shipped nimbusos.pref, apt keeps Debian's and
+#           lists 99.0 at priority 1 (smoke test 9); unplant removes it;
+#         - bad tags, ports, names and arguments are refused.
 #       publish and iso are not run here: they are build-debs.sh,
 #       publish-apt.sh and build.sh, which have their own tests, and the
 #       QEMU test in docs/TESTING.md runs them for real.
@@ -151,7 +154,39 @@ fi
 "$TOOL" --dir "$M" --port "$PORT" repair >"$T/repair2.log" 2>&1 || fail "repair after beta"
 check "check passes after repair" "$TOOL" --dir "$M" check
 
+echo "plant and unplant (smoke test 9)"
+"$TOOL" --dir "$M" --port "$PORT" plant bash 99.0 >"$T/plant.log" 2>&1 || { cat "$T/plant.log"; fail "plant bash 99.0"; }
+check "plant: stable's index lists bash 99.0" \
+	grep -qx 'Version: 99.0' "$M/site/apt/dists/stable/main/binary-amd64/Packages"
+check "plant: check still passes" "$TOOL" --dir "$M" check
+# The guest's view: Debian's bash is installed, and the shipped pin file
+# (rendered for this mirror's host) is in place.
+cat >>"$A/status" <<'EOF'
+Package: bash
+Status: install ok installed
+Priority: required
+Section: shells
+Installed-Size: 7000
+Maintainer: Test <test@example.invalid>
+Architecture: amd64
+Version: 5.2.37-2
+Description: test stand-in for Debian's bash
+
+EOF
+sed "s/@NIMBUS_APT_HOST@/127.0.0.1/" "$ROOT/packages/nimbusos-release/apt/nimbusos.pref" >"$A/etc/preferences.d/nimbusos.pref"
+apt_update "$T/apt-plant.log" || { sed 's/^/        /' "$T/apt-plant.log"; fail "apt-get update with the planted package"; }
+policy="$(APT_CONFIG="$A/apt.conf" LC_ALL=C.UTF-8 apt-cache policy bash)"
+printf '%s\n' "$policy" | sed 's/^/        /'
+check "plant: apt keeps the installed bash 5.2.37-2" grep -qE '^ +Candidate: 5\.2\.37-2$' <<<"$policy"
+check "plant: the mirror's bash 99.0 has priority 1" grep -qE '^ +99\.0 1$' <<<"$policy"
+"$TOOL" --dir "$M" --port "$PORT" unplant bash >"$T/unplant.log" 2>&1 || { cat "$T/unplant.log"; fail "unplant bash"; }
+check "unplant: bash is gone from the index" bash -c "! grep -q '^Package: bash$' '$M/site/apt/dists/stable/main/binary-amd64/Packages'"
+check "unplant: check passes" "$TOOL" --dir "$M" check
+
 echo "refusals"
+refuses "plant: NimbusOS's own names are refused" "own names" plant nimbus-control 9.0
+refuses "plant: an epoch is refused" "is not a Debian version" plant bash 1:99.0
+refuses "unplant: nothing planted" "Nothing is planted" unplant zsh
 refuses "publish: not a release tag" "is not a release tag" publish v1.0
 refuses "publish: a dev version is not a tag" "is not a release tag" publish 0.1.0
 refuses "iso: needs published packages" "No packages for v9.9.9" iso v9.9.9
