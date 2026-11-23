@@ -23,6 +23,7 @@ class Settings:
     os_release: str = "/etc/os-release"
     logo_path: str = "/usr/share/icons/hicolor/scalable/apps/nimbusos.svg"
     catalog_dir: str = "/usr/share/nimbus-control/catalog"
+    docker_socket: str = "/var/run/docker.sock"
     libvirt_uri: str = "qemu:///system"
     isos_dir: str = "/var/lib/nimbus-vms/isos"
     images_dir: str = "/var/lib/nimbus-vms/images"

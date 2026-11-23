@@ -753,5 +753,8 @@ export async function render(root, ctx) {
   }
 
   await load();
+  const intent = ctx.takeIntent("storage");
+  const tabIndex = ["shares", "disks", "pool", "users"].indexOf(intent && intent.tab);
+  if (tabIndex > 0) tabs.querySelectorAll("button")[tabIndex].click();
   return () => { alive = false; clearInterval(timer); unregister(); };
 }

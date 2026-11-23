@@ -471,6 +471,44 @@ class AppsService:
         return self._deploy_job(name, entry, record["inputs"], new, new_record, "template update",
                                 f"'{name}' now uses template version {entry['manifest']['template_version']}.")
 
+    # --- what's wrong (the dashboard's Fix) ----------------------------------------------------------
+    async def diagnose(self, name):
+        """The setting an app's error most likely comes from, as {field,
+        message} for the Edit dialog to highlight: a host port another
+        program holds, a folder that isn't there (a disk or share offline),
+        a required variable left empty; otherwise only the reason."""
+        record = self._record(name)
+        containers, problem = await self._containers()
+        mine = [c for c in containers or [] if c["project"] == name]
+        if problem:
+            return {"field": None, "message": problem}
+        running = any(c["state"] == "running" for c in mine)
+        if not running:
+            used = await self.used_ports(exclude=name)
+            own = {(p.get("protocol", "tcp"), p["host"]) for p in record["inputs"]["ports"]}
+            for proto, port in own:                     # its own ports are free only while it doesn't run
+                for conn in psutil.net_connections(kind="inet"):
+                    if conn.laddr and conn.laddr.port == port and ((proto == "udp") == (conn.type == socket.SOCK_DGRAM)) \
+                            and (proto == "udp" or conn.status == psutil.CONN_LISTEN):
+                        used.setdefault((proto, port), "another program on this computer")
+            for i, p in enumerate(record["inputs"]["ports"]):
+                key = (p.get("protocol", "tcp"), p["host"])
+                if key in used:
+                    free = self._next_free(p["host"], key[0], used)
+                    return {"field": f"ports.{i}.host",
+                            "message": f"Port {p['host']}/{key[0]} is used by {used[key]}. Use {free} instead."}
+        for i, v in enumerate(record["inputs"]["volumes"]):
+            if v["source"].startswith("/") and not os.path.exists(v["source"]):
+                return {"field": f"volumes.{i}.source",
+                        "message": f"The folder {v['source']} isn't there. Is its disk or share offline?"}
+        entry = self.catalog.get(record["app"])
+        for e in (entry["manifest"]["env"] if entry else []):
+            if e["required"] and not record["inputs"]["env"].get(e["name"]):
+                return {"field": f"env.{e['name']}", "message": f"{e['name']} is required: {e['description']}."}
+        state, reason = self.stack_status(mine, record.get("desired", "running"))
+        detail = reason if state == "error" else "No setting looks wrong."
+        return {"field": None, "message": f"{detail} Its log (Logs) usually says why."}
+
     # --- status ----------------------------------------------------------------------------------
     @staticmethod
     def stack_status(containers, desired="running"):
@@ -511,8 +549,11 @@ class AppsService:
         host = "localhost" if webui["secure_context"] else socket.gethostname()
         return f"http://{host}:{port}{webui['path']}"
 
-    async def list(self):
-        containers, problem = await self._containers()
+    async def list(self, containers=None, problem=None):
+        """Every app with its status. CONTAINERS (and PROBLEM, when Docker
+        couldn't be read) may come from a caller that listed them already."""
+        if containers is None and problem is None:
+            containers, problem = await self._containers()
         by_project = {}
         for c in containers or []:
             by_project.setdefault(c["project"], []).append(c)
@@ -695,6 +736,11 @@ async def action(name: str, action: str, request: Request):
 async def uninstall(name: str, request: Request, delete_data: bool = Query(False)):
     job = await svc(request).uninstall(name, delete_data)
     return {"job": job.id, "name": name}
+
+
+@router.get("/api/apps/{name}/diagnose")
+async def diagnose(name: str, request: Request):
+    return await svc(request).diagnose(name)
 
 
 @router.get("/api/apps/{name}/template-diff")

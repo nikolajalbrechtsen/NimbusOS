@@ -86,6 +86,7 @@ class VmService:
     def _usage(self, stats):
         now = time.monotonic()
         out = {}
+        stats = {uid: s for uid, s in stats.items() if s.get("active", True)}
         for uid, s in stats.items():
             last = self._samples.get(uid)
             self._samples[uid] = (now, s["cpu_time"])

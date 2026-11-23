@@ -9,7 +9,8 @@
 #                          support, host threads and memory
 #         domains()        every VM with its state, settings, disks, CD-ROMs
 #                          and VNC display (vm_xml.parse_domain)
-#         stats()          one getAllDomainStats() call: CPU time, memory
+#         stats()          one getAllDomainStats() call: state (crashed and
+#                          paused-on-error marked), CPU time, memory
 #                          (balloon.rss), vCPUs
 #         define(), start(), shutdown() (ACPI), force_off(), reboot(),
 #         set_autostart(), undefine() (with its UEFI variables and TPM
@@ -31,10 +32,22 @@ POOL = "nimbus-images"
 UNAVAILABLE = "libvirt isn't running, so virtual machines can't be shown. Start it with: sudo systemctl start libvirtd"
 STATES = {0: "unknown", 1: "running", 2: "running", 3: "paused", 4: "stopping", 5: "stopped", 6: "crashed",
           7: "suspended"}
-# Why a paused VM is paused (virDomainPausedReason), in words.
-PAUSED_REASONS = {1: "paused by the user", 3: "paused while saving", 5: "paused by a disk error (is the disk full?)",
-                  6: "paused because its watchdog fired", 10: "paused because its disk space ran out",
-                  11: "paused while starting", 13: "paused after a crash (guest panic)"}
+# Why a paused VM is paused (virDomainPausedReason), in words. A full disk
+# shows up as an I/O error (5).
+PAUSED_REASONS = {1: "paused by the user", 3: "paused while saving", 4: "paused while dumping its memory",
+                  5: "paused by a disk error (is the disk full?)", 6: "paused because its watchdog fired",
+                  10: "paused after its system crashed", 11: "paused while starting"}
+PAUSED_PROBLEMS = (5, 6, 10)                 # reasons the dashboard raises an alert for
+SHUTOFF_CRASHED = 3                          # virDomainShutoffReason: stopped because it crashed
+
+
+def state_of(state, reason):
+    """(state name, reason in words) from libvirt's numbers."""
+    if state == 6 or (state == 5 and reason == SHUTOFF_CRASHED):
+        return "crashed", "its system crashed"
+    if state == 3:
+        return "paused", PAUSED_REASONS.get(reason, "paused")
+    return STATES.get(state, "unknown"), ""
 
 
 class LibvirtUnavailable(Exception):
@@ -137,13 +150,14 @@ class LibvirtApi:
             pool = self._pool(conn, libvirt, create=False)
             result = []
             for dom in conn.listAllDomains(0):
-                state, reason = dom.state()
+                raw_state, raw_reason = dom.state()
+                state, reason = state_of(raw_state, raw_reason)
                 info = vm_xml.parse_domain(dom.XMLDesc(0))
                 for disk in info["disks"]:
                     disk.update(self._disk_size(conn, libvirt, pool, disk))
                 result.append({
-                    "name": dom.name(), "uuid": dom.UUIDString(), "state": STATES.get(state, "unknown"),
-                    "reason": PAUSED_REASONS.get(reason, "paused") if state == 3 else "",
+                    "name": dom.name(), "uuid": dom.UUIDString(), "state": state, "reason": reason,
+                    "problem": state == "crashed" or (raw_state == 3 and raw_reason in PAUSED_PROBLEMS),
                     "autostart": bool(dom.autostart()), "persistent": bool(dom.isPersistent()),
                     "vcpus": dom.info()[3], "memory": dom.maxMemory() * 1024, **info,
                 })
@@ -165,15 +179,22 @@ class LibvirtApi:
             return {}
 
     def stats(self):
-        """{uuid: {cpu_time (ns), rss (bytes), vcpus, memory (bytes)}} for running VMs."""
+        """One getAllDomainStats() call for every VM: {uuid: {name, state,
+        reason, problem, active, cpu_time (ns), vcpus, rss and memory (bytes)}}.
+        Memory is balloon.rss, or the configured memory without it."""
         def work(conn, libvirt):
             kinds = (libvirt.VIR_DOMAIN_STATS_STATE | libvirt.VIR_DOMAIN_STATS_CPU_TOTAL
                      | libvirt.VIR_DOMAIN_STATS_BALLOON | libvirt.VIR_DOMAIN_STATS_VCPU)
             out = {}
-            for dom, s in conn.getAllDomainStats(kinds, libvirt.VIR_CONNECT_GET_ALL_DOMAINS_STATS_ACTIVE):
+            for dom, s in conn.getAllDomainStats(kinds, 0):
+                raw_state, raw_reason = s.get("state.state", 0), s.get("state.reason", 0)
+                state, reason = state_of(raw_state, raw_reason)
                 memory = s.get("balloon.current", 0) * 1024
-                out[dom.UUIDString()] = {"cpu_time": s.get("cpu.time", 0), "vcpus": s.get("vcpu.current", 1) or 1,
-                                         "rss": s.get("balloon.rss", 0) * 1024 or memory, "memory": memory}
+                out[dom.UUIDString()] = {
+                    "name": dom.name(), "state": state, "reason": reason, "active": raw_state in (1, 2, 3, 4),
+                    "problem": state == "crashed" or (raw_state == 3 and raw_reason in PAUSED_PROBLEMS),
+                    "cpu_time": s.get("cpu.time", 0), "vcpus": s.get("vcpu.current", 0) or s.get("vcpu.maximum", 1) or 1,
+                    "rss": s.get("balloon.rss", 0) * 1024 or memory, "memory": memory}
             return out
         return self._call(work)
 

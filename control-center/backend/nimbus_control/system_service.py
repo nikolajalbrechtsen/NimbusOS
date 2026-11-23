@@ -38,19 +38,23 @@ def read_os_release(path):
     return values
 
 
-def default_route_ip():
-    """IPv4 address of the interface that carries the default route."""
-    iface = None
+def default_route_iface(route_file="/proc/net/route"):
+    """The interface that carries the IPv4 default route, or None."""
     try:
-        with open("/proc/net/route", encoding="ascii") as f:
+        with open(route_file, encoding="ascii") as f:
             next(f)
             for line in f:
                 fields = line.split()
                 if len(fields) > 2 and fields[1] == "00000000":
-                    iface = fields[0]
-                    break
+                    return fields[0]
     except (OSError, StopIteration):
         return None
+    return None
+
+
+def default_route_ip():
+    """IPv4 address of the interface that carries the default route."""
+    iface = default_route_iface()
     for addr in psutil.net_if_addrs().get(iface, []) if iface else []:
         if addr.family == socket.AF_INET:
             return addr.address

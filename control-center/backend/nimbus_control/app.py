@@ -7,7 +7,7 @@
 #           "counters" (name -> async function) for the sidebar counts;
 #         - routes: session, system, updates, apps and the catalog, jobs,
 #           VMs and the ISO library, storage, shares and SMB users, settings,
-#           fonts, /logo.svg (the NimbusOS logo from
+#           the dashboard (metrics_service), fonts, /logo.svg (the NimbusOS logo from
 #           nimbusos-branding), the packaged noVNC at /novnc/ (VM consoles),
 #           then the frontend's static files;
 #         - no OpenAPI or docs pages (nothing to browse on a desktop app);
@@ -19,6 +19,7 @@
 # =============================================================================
 
 import asyncio
+import contextlib
 import os
 
 import psutil
@@ -26,8 +27,8 @@ from fastapi import FastAPI
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import (apps_service, errors, fonts, jobs, shares_service, storage_service, system_service, updates_service,
-               vm_service)
+from . import (apps_service, errors, fonts, jobs, metrics_service, shares_service, storage_service, system_service,
+               updates_service, vm_service)
 from .auth import LaunchCodes, SecurityMiddleware, TokenStore
 from .auth import router as session_router
 from .catalog import Catalog
@@ -40,9 +41,17 @@ from .privd_client import PrivdClient
 from .state import StateStore
 
 
-def create_app(settings=None, privd=None, font_lister=fonts.package_files, docker=None, libvirt=None, bridges=None):
+def create_app(settings=None, privd=None, font_lister=fonts.package_files, docker=None, libvirt=None, bridges=None,
+               host_sampler=None):
     settings = settings or Settings.from_env()
-    app = FastAPI(title="Nimbus Control Center", docs_url=None, redoc_url=None, openapi_url=None)
+
+    @contextlib.asynccontextmanager
+    async def lifespan(_):
+        app.state.metrics.start_housekeeping()         # SMART and parity copies, hourly
+        yield
+        await app.state.metrics.stop()
+
+    app = FastAPI(title="Nimbus Control Center", docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan)
     app.state.settings = settings
     app.state.tokens = TokenStore(settings.run_dir)
     app.state.codes = LaunchCodes()
@@ -60,6 +69,10 @@ def create_app(settings=None, privd=None, font_lister=fonts.package_files, docke
     app.state.shares = shares_service.SharesService(app.state.store, app.state.privd, app.state.jobs)
     app.state.storage = storage_service.StorageService(app.state.store, app.state.privd, app.state.jobs,
                                                        app.state.shares)
+    app.state.metrics = metrics_service.MetricsService(
+        store=app.state.store, privd=app.state.privd, docker=app.state.apps.docker, libvirt=app.state.vms.libvirt,
+        apps=app.state.apps, updates=app.state.updates, host=host_sampler, docker_socket=settings.docker_socket)
+    app.state.storage.on_listing = app.state.metrics.refresh_storage   # the Storage page keeps the dashboard's copy fresh
     # A fresh start: no console stays open and no upload can be resumed.
     app.state.vms.clear_tokens()
     try:
@@ -78,7 +91,7 @@ def create_app(settings=None, privd=None, font_lister=fonts.package_files, docke
 
     app.state.counters = {"updates": app.state.updates.pending_count, "apps": app_count, "vms": vm_count,
                           "shares": share_count}
-    psutil.cpu_percent(interval=None)        # the first reading is always 0.0
+    psutil.cpu_percent(interval=None)        # the sidebar's first reading would be 0.0
 
     errors.install(app)
     app.include_router(session_router)
@@ -89,6 +102,7 @@ def create_app(settings=None, privd=None, font_lister=fonts.package_files, docke
     app.include_router(vm_service.router)
     app.include_router(storage_service.router)
     app.include_router(shares_service.router)
+    app.include_router(metrics_service.router)
     app.include_router(fonts.router)
 
     @app.get("/logo.svg", include_in_schema=False)

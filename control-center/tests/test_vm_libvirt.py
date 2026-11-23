@@ -7,7 +7,10 @@
 #         - a Linux UEFI VM and a Windows VM (Secure Boot firmware with
 #           Microsoft's keys, swtpm TPM 2.0, Hyper-V) are created, start and
 #           run; a legacy BIOS VM too;
-#         - CPU statistics move; the CD is ejected and inserted while running;
+#         - the Dashboard's statistics call: a running VM's state, vCPUs,
+#           memory and resident size; CPU time moves; a paused VM's reason
+#           (libvirt's own number, read back); a stopped VM in the same call;
+#         - the CD is ejected and inserted while running;
 #           reboot, ACPI shutdown (no OS answers it), force off; autostart;
 #         - a console token reaches the VM's VNC server through websockify,
 #           which offers VNC password authentication; a wrong token is refused;
@@ -89,9 +92,16 @@ def test_linux_uefi_vm(env):
     vm = state(lv, "it-linux")
     assert vm["preset"] == "linux" and vm["firmware"] == "uefi" and vm["vnc"]["port"] >= 5900
     assert vm["disks"][0]["in_pool"] is True and vm["disks"][0]["capacity"] == 1024 ** 3
-    first = lv.stats()[vm["uuid"]]["cpu_time"]
+    now = lv.stats()[vm["uuid"]]                     # the Dashboard's one call per sample
+    assert now["name"] == "it-linux" and now["state"] == "running" and now["active"] and not now["problem"]
+    assert now["vcpus"] == 1 and now["memory"] == 512 * 2 ** 20 and now["rss"] > 0
     time.sleep(1)
-    assert lv.stats()[vm["uuid"]]["cpu_time"] > first
+    assert lv.stats()[vm["uuid"]]["cpu_time"] > now["cpu_time"]
+    virsh = ["virsh", "-c", "qemu:///system"]
+    subprocess.run([*virsh, "suspend", "it-linux"], check=True, capture_output=True)
+    paused = lv.stats()[vm["uuid"]]                  # libvirt's own reason number, not an alert
+    assert (paused["state"], paused["reason"], paused["active"], paused["problem"]) == ("paused", "paused by the user", True, False)
+    subprocess.run([*virsh, "resume", "it-linux"], check=True, capture_output=True)
 
 
 def test_console_through_websockify(env):
@@ -138,6 +148,8 @@ def test_cd_and_lifecycle(env):
     assert "asked to restart" in run(svc.action("it-linux", "reboot"))
     assert run(svc.action("it-linux", "force-off")) == "'it-linux' was turned off."
     assert state(lv, "it-linux")["state"] == "stopped"
+    off = lv.stats()[state(lv, "it-linux")["uuid"]]  # stopped VMs are in the same call, and not counted
+    assert off["state"] == "stopped" and not off["active"] and not off["problem"]
     run(svc.set_autostart("it-linux", True))
     assert state(lv, "it-linux")["autostart"] is True
     assert run(svc.action("it-linux", "start")) == "'it-linux' started."

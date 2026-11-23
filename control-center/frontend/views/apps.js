@@ -15,7 +15,8 @@
 //         (checked with docker compose config before deploying); the field an
 //         error is about is highlighted;
 //       - every job (install, update, ...) streams its log into the drawer.
-//       Refreshes the status every 5 seconds while open.
+//       Refreshes the status every 5 seconds while open. The Dashboard's
+//       "Fix" lands here and opens the app's settings at the failing one.
 // Why:  spec Tab A; docs/PLAN.md NOTE-30 and NOTE-66.
 // =============================================================================
 
@@ -442,6 +443,27 @@ export async function render(root, ctx) {
     if (firstError) showError(firstError);
   }
 
+  // The Dashboard's "Fix": open the app's settings at the setting that
+  // most likely broke it (GET /api/apps/<name>/diagnose).
+  async function fix(name) {
+    const app = state.apps.find((a) => a.name === name);
+    if (!app) return;
+    try {
+      const found = await api.get(`/api/apps/${encodeURIComponent(name)}/diagnose`);
+      if (found.field) {
+        advanced(app.app, name, { field: found.field, message: found.message });
+      } else {
+        ui.toast(found.message, "warn");
+        advanced(app.app, name);
+      }
+    } catch (error) {
+      ui.toast(ui.errorText(error), "bad");
+    }
+  }
+
   await load();
+  const intent = ctx.takeIntent("apps");
+  if (intent && intent.fix) fix(intent.fix);
+  if (intent && intent.tab === "catalog") showCatalog();
   return () => { alive = false; clearInterval(timer); unregister(); };
 }

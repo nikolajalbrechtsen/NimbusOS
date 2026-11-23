@@ -14,6 +14,9 @@
 #                      subcommand WORD fail, config_error(text) makes
 #                      "compose config" reject the file
 #         FIXTURE_CATALOG  three demo apps (tests/fixtures/catalog)
+#         FakeDockerd  a Docker daemon on a Unix socket for the streaming API:
+#                      /containers/<id>/stats?stream=1 (chunked, documents
+#                      split across chunks) and /events (push_event())
 #         FakeNas      privd's storage and Samba verbs with state: disks,
 #                      fstab entries, SMB users, the last applied shares;
 #                      fail[verb] makes a verb fail like privd does
@@ -233,7 +236,8 @@ class FakeLibvirt:
                     disk.update(capacity=8 * 1024 ** 3, allocation=0, in_pool=False)
             unit = {"KiB": 1024, "MiB": 1024 ** 2, "GiB": 1024 ** 3}[root.find("memory").get("unit", "KiB")]
             out.append({"name": name, "uuid": vm["uuid"], "state": vm["state"], "reason": vm.get("reason", ""),
-                        "autostart": vm["autostart"], "persistent": True, "vcpus": int(root.findtext("vcpu")),
+                        "problem": vm.get("problem", vm["state"] == "crashed"), "autostart": vm["autostart"],
+                        "persistent": True, "vcpus": int(root.findtext("vcpu")),
                         "memory": int(root.findtext("memory")) * unit, **info})
         return out
 
@@ -241,10 +245,13 @@ class FakeLibvirt:
         import xml.etree.ElementTree as ET
         self._enter("stats")
         out = {}
-        for vm in self.vms.values():
-            if vm["state"] in ("running", "paused"):
-                vcpus = int(ET.fromstring(vm["xml"]).findtext("vcpu"))
-                out[vm["uuid"]] = {"cpu_time": vm["cpu_time"], "vcpus": vcpus, "rss": 512 * 1024 ** 2, "memory": 1024 ** 3}
+        for name, vm in self.vms.items():
+            active = vm["state"] in ("running", "paused")
+            vcpus = int(ET.fromstring(vm["xml"]).findtext("vcpu"))
+            out[vm["uuid"]] = {"name": name, "state": vm["state"], "reason": vm.get("reason", ""), "active": active,
+                               "problem": vm.get("problem", vm["state"] == "crashed"), "cpu_time": vm["cpu_time"] if active else 0,
+                               "vcpus": vcpus, "rss": vm.get("rss", 512 * 1024 ** 2) if active else 0,
+                               "memory": 1024 ** 3 if active else 0}
         return out
 
     def vnc_target(self, name):
@@ -436,3 +443,97 @@ class FakeNas:
 
     def disk_unmount(self, args):
         return {"label": args["label"]}
+
+
+# --- Docker's streaming API ---------------------------------------------------------------
+class FakeDockerd:
+    """Serve on PATH: stats[cid] is a list of documents sent one by one every
+    INTERVAL seconds (the last repeats); push_event(doc) sends an event."""
+
+    def __init__(self, path, interval=0.05):
+        import asyncio
+        self.path = str(path)
+        self.interval = interval
+        self.stats = {}
+        self.events = asyncio.Queue()
+        self.requests = []
+        self.open = 0
+        self.server = None
+        self.tasks = set()
+
+    async def start(self):
+        import asyncio
+        self.server = await asyncio.start_unix_server(self._handle, self.path)
+        return self
+
+    async def stop(self):
+        import asyncio
+        self.server.close()
+        for task in list(self.tasks):                  # wait_closed() waits for open connections
+            task.cancel()
+        await asyncio.gather(*self.tasks, return_exceptions=True)
+        await self.server.wait_closed()
+
+    def push_event(self, doc):
+        self.events.put_nowait(doc)
+
+    @staticmethod
+    async def _chunk(writer, data):
+        writer.write(f"{len(data):x}\r\n".encode() + data + b"\r\n")
+        await writer.drain()
+
+    async def _handle(self, reader, writer):
+        import asyncio
+        import json
+        self.open += 1
+        self.tasks.add(asyncio.current_task())
+        try:
+            request = (await reader.readline()).decode()
+            while (await reader.readline()) not in (b"\r\n", b""):
+                pass
+            target = request.split(" ")[1]
+            self.requests.append(target)
+            path = target.split("?")[0]
+            head = b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nTransfer-Encoding: chunked\r\n\r\n"
+            if path.startswith("/containers/") and path.endswith("/stats"):
+                cid = path.split("/")[2]
+                if cid not in self.stats:
+                    body = json.dumps({"message": f"No such container: {cid}"}).encode()
+                    writer.write(f"HTTP/1.1 404 Not Found\r\nContent-Length: {len(body)}\r\n\r\n".encode() + body)
+                    await writer.drain()
+                    return
+                writer.write(head)
+                i = 0
+                while True:
+                    docs = self.stats[cid]
+                    data = json.dumps(docs[min(i, len(docs) - 1)]).encode() + b"\n"
+                    half = len(data) // 2
+                    await self._chunk(writer, data[:half])         # a document split across two chunks
+                    await self._chunk(writer, data[half:])
+                    i += 1
+                    await asyncio.sleep(self.interval)
+            elif path == "/events":
+                writer.write(head)
+                await writer.drain()
+                while True:
+                    doc = await self.events.get()
+                    await self._chunk(writer, json.dumps(doc).encode() + b"\n")
+            else:
+                writer.write(b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n")
+                await writer.drain()
+        except (ConnectionError, asyncio.CancelledError):
+            pass
+        finally:
+            self.open -= 1
+            self.tasks.discard(asyncio.current_task())
+            writer.close()
+
+
+def docker_stats(total, system, online=4, usage=0, inactive=0, pre_total=0, pre_system=0, cgroup=2):
+    """A stats document as Docker sends it (cgroup v2 by default)."""
+    detail = {"inactive_file": inactive, "active_file": 0, "anon": usage - inactive} if cgroup == 2 else \
+        {"total_inactive_file": inactive, "cache": inactive}
+    return {"read": "2026-11-23T10:00:02Z", "preread": "2026-11-23T10:00:00Z",
+            "cpu_stats": {"cpu_usage": {"total_usage": total}, "system_cpu_usage": system, "online_cpus": online},
+            "precpu_stats": {"cpu_usage": {"total_usage": pre_total}, "system_cpu_usage": pre_system, "online_cpus": online},
+            "memory_stats": {"usage": usage, "limit": 8 * 1024 ** 3, "stats": detail}}

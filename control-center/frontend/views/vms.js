@@ -19,7 +19,7 @@
 // Why:  spec Tab B; docs/PLAN.md NOTE-67.
 // =============================================================================
 
-import { openConsole } from "../lib/vnc.js";
+import { consoleModal } from "../lib/vnc.js";
 
 const STATES = {
   running: ["good", "Running"], paused: ["warn", "Paused"], stopping: ["info", "Shutting down"],
@@ -187,25 +187,7 @@ export async function render(root, ctx) {
 
   // --- console -----------------------------------------------------------------------------
   function consoleFor(vm) {
-    const screen = h("div", { class: "vnc-screen", tabindex: "-1" });
-    let rfb = null;
-    const m = ui.modal({
-      title: `Console: ${vm.name}`, wide: true, body: screen, hint: "Connecting…",
-      actions: [
-        ui.button({ label: "Ctrl+Alt+Del", small: true, onClick: () => rfb && rfb.sendCtrlAltDel() }),
-        ui.button({ small: true, kind: "ghost", iconName: "fullscreen", title: "Full screen", onClick: () => screen.requestFullscreen && screen.requestFullscreen() }),
-        ui.button({ small: true, kind: "ghost", iconName: "external", title: "Open in its own window", onClick: () => {
-          m.close();
-          // Not "noopener": the new window takes this window's session with it.
-          window.open(`/console.html#${encodeURIComponent(vm.name)}`, `nimbus-console-${vm.uuid}`, "popup,width=1100,height=800");
-        } }),
-        ui.button({ label: "Close", small: true, onClick: () => m.close() })],
-      onClose: () => rfb && rfb.disconnect(),
-    });
-    m.el.classList.add("console-modal");
-    openConsole(api, vm.name, screen, (kind, text) => m.setHint(text))
-      .then((r) => { rfb = r; })
-      .catch((error) => m.setHint(ui.errorText(error)));
+    consoleModal(api, ui, vm);
   }
 
   // --- options and delete -------------------------------------------------------------------

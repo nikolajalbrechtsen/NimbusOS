@@ -9,6 +9,7 @@
 //       go to the VM after a click. onStatus(kind, text) reports
 //       "Connecting…", "Connected", "Disconnected" or why it failed.
 //       Returns the noVNC RFB object (disconnect(), sendCtrlAltDel()).
+//       consoleModal() wraps it in the console dialog both pages use.
 // Why:  spec Tab B ("The packaged noVNC is embedded in the UI");
 //       docs/PLAN.md NOTE-16 and NOTE-67.
 // =============================================================================
@@ -32,4 +33,30 @@ export async function openConsole(api, name, target, onStatus) {
   rfb.addEventListener("credentialsrequired", () => rfb.sendCredentials({ password: info.password }));
   rfb.addEventListener("securityfailure", (event) => onStatus("bad", `The VM refused the console: ${event.detail.reason || "wrong password"}.`));
   return rfb;
+}
+
+// consoleModal(api, ui, vm): the console in a large dialog, with
+// Ctrl+Alt+Del, full screen and "open in its own window" (console.html).
+// VM: {name, uuid}. Used by the Virtual Machines page and the Dashboard.
+export function consoleModal(api, ui, vm) {
+  const screen = ui.h("div", { class: "vnc-screen", tabindex: "-1" });
+  let rfb = null;
+  const m = ui.modal({
+    title: `Console: ${vm.name}`, wide: true, body: screen, hint: "Connecting…",
+    actions: [
+      ui.button({ label: "Ctrl+Alt+Del", small: true, onClick: () => rfb && rfb.sendCtrlAltDel() }),
+      ui.button({ small: true, kind: "ghost", iconName: "fullscreen", title: "Full screen", onClick: () => screen.requestFullscreen && screen.requestFullscreen() }),
+      ui.button({ small: true, kind: "ghost", iconName: "external", title: "Open in its own window", onClick: () => {
+        m.close();
+        // Not "noopener": the new window takes this window's session with it.
+        window.open(`/console.html#${encodeURIComponent(vm.name)}`, `nimbus-console-${vm.uuid}`, "popup,width=1100,height=800");
+      } }),
+      ui.button({ label: "Close", small: true, onClick: () => m.close() })],
+    onClose: () => rfb && rfb.disconnect(),
+  });
+  m.el.classList.add("console-modal");
+  openConsole(api, vm.name, screen, (kind, text) => m.setHint(text))
+    .then((r) => { rfb = r; })
+    .catch((error) => m.setHint(ui.errorText(error)));
+  return m;
 }

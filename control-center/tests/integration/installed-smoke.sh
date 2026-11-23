@@ -36,6 +36,8 @@
 #           folder's owner and mode; testparm; the Avahi file; smbd serving
 #           it to that user (files group nimbus-smb, 0664) and not to guests;
 #           Test connection; the default settings;
+#         - the Dashboard: its files; /api/dashboard with real psutil numbers,
+#           Docker and libvirt reported down; /ws/metrics every 2 seconds;
 #         - privd audited each request.
 # Why:  the pieces are unit-tested; this proves they fit together as packaged
 #       (paths, Python module path, users, permissions).
@@ -175,6 +177,22 @@ try:
 except Exception:
     raise SystemExit(0)
 raise SystemExit(1)'
+
+echo "Dashboard"
+for page in views/dashboard.js lib/charts.js; do
+	check "/$page is served" curl -fsS -o /dev/null "http://127.0.0.1:7777/$page"
+done
+check "/api/dashboard measures the host (real psutil) and says Docker and libvirt are down" \
+	python3 -c 'import json,sys; s=json.loads(sys.argv[1]); h=s["host"]; assert h["memory"]["total"] > 0 and 0 <= h["cpu"] <= 100 and len(s["history"]["cpu"]) >= 1 and h["threads"] >= 1; assert not s["docker"]["ok"] and not s["libvirt"]["ok"]; assert s["storage"]["system"]["total"] > 0 and isinstance(s["alerts"], list)' \
+	"$(api http://127.0.0.1:7777/api/dashboard || echo '{}')"
+check "/ws/metrics pushes a new sample every 2 seconds" python3 - "$TOKEN" <<'EOF'
+import json, sys, time, websockets.sync.client as c
+with c.connect("ws://127.0.0.1:7777/ws/metrics", subprotocols=["nimbus.v1", f"nimbus.token.{sys.argv[1]}"],
+               origin="http://127.0.0.1:7777") as ws:
+    first = json.loads(ws.recv(timeout=10)); start = time.monotonic()
+    second = json.loads(ws.recv(timeout=10)); gap = time.monotonic() - start
+assert first["type"] == second["type"] == "tick" and second["t"] > first["t"] and 1.0 < gap < 4.0, gap
+EOF
 
 echo "NAS"
 job_ok() {   # job_ok JSON_WITH_JOB_ID: wait for the job through the API, succeed if it did

@@ -57,6 +57,7 @@ class StorageService:
         self.privd = privd
         self.jobs = jobs
         self.shares = shares
+        self.on_listing = None          # called with what privd returned (the dashboard keeps a copy)
 
     async def listing(self):
         return await self.privd.call("disk.list", timeout=300)
@@ -67,6 +68,8 @@ class StorageService:
         parity = None
         if pool["mode"] == "parity":
             parity = await self.privd.call("snapraid.status", timeout=700)
+        if self.on_listing:
+            await self.on_listing(listing, parity)
         by_location = {}
         for spec in self.shares.specs():
             by_location.setdefault(spec["location"], []).append(spec["name"])

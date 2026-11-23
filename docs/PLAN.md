@@ -91,7 +91,8 @@ NimbusOS/
 │   │                                 system_service.py, updates_service.py, state.py, jobs.py; Apps: catalog.py,
 │   │                                 manifest.py, compose.py, docker_api.py, apps_service.py; VMs: vm_service.py,
 │   │                                 vm_xml.py, libvirt_api.py, iso_library.py; NAS: storage_service.py,
-│   │                                 shares_service.py; later: metrics_service.py
+│   │                                 shares_service.py; Dashboard: metrics_service.py (collector), docker_stream.py
+│   │                                 (Docker's streaming API), alerts.py ("Needs attention")
 │   ├── common/nimbus_common/         shared by backend, privd and timers: validate.py, protocol.py (privd wire
 │   │                                 format), shares.py (what a share is, where its folder is)
 │   ├── privd/                        nimbus-privd.py + nimbus_privd/ (server, registry, runner, audit, updates,
@@ -112,6 +113,7 @@ NimbusOS/
 │       ├── integration/installed-smoke.sh            the installed package, run as its units would run it
 │       ├── integration/vm-libvirt.sh                 a real libvirtd: VMs, firmware, TPM, websockify, live console shots
 │       ├── integration/nas-integration.sh            real mergerfs, SnapRAID, Samba, smbclient and iptables
+│       ├── integration/docker-streams.sh             a real dockerd: the events and stats streams the Dashboard reads
 │       └── integration/samba-ucf-keeps-include.sh   CI: a ucf-managed smb.conf update keeps the include (NOTE-23)
 │
 ├── catalog/
@@ -263,7 +265,7 @@ Rules applied to all seven: lintian-clean or a justified override; idempotent, u
 - **VMs.** One `getAllDomainStats()` call per tick. CPU % of host = Δ`cpu.time` / (Δt × host threads); CPU % of the VM's own vCPUs is also shown. Memory is `balloon.rss`, falling back to the configured memory.
 - **Storage.** `statvfs` locally. SMART and parity come from privd's hourly cache; the dashboard never triggers a scan.
 - **Attribution.** System & desktop = max(0, total − Docker − VMs), calculated separately for CPU and memory.
-- **Alert rules** (all in `metrics_service.py`): container exited unexpectedly (its stack's desired state is "running"), restart loop (≥ 3 restarts in 5 min, or `Restarting`), unhealthy; VM crashed or paused with reason I/O error; SMART failing, reallocated or pending sectors > 0, temperature over threshold (HDD 50 °C, NVMe 70 °C by default); pool > 90 % full; parity not synced for more than 48 h or more than 10 GB unprotected; a failed unit (`nimbus-*`, `smbd`, `docker`, the libvirt daemons, NOTE-20), checked every 10 s; security updates waiting, a new NimbusOS release, restart required, repository unreachable, or not checked for more than 7 days; `nimbusos-desktop` not installed (NOTE-48).
+- **Alert rules** (all in `alerts.py`, NOTE-69): container exited unexpectedly (its stack's desired state is "running"), restart loop (≥ 3 restarts in 5 min, or `Restarting`), unhealthy; VM crashed or paused by an I/O error, its watchdog or a guest crash; SMART failing, reallocated or pending sectors > 0, temperature over threshold (HDD 50 °C, NVMe 70 °C by default); pool or system disk > 90 % full; parity's last sync failed, not synced for more than 48 h, or more than 10 GB unprotected; a failed unit (`nimbus-*`, `smbd`, `wsdd2`, `docker`, `libvirtd`, NOTE-20), checked every 10 s; security updates waiting, a new NimbusOS release, restart required, repository unreachable, or not checked for more than 7 days; `nimbusos-desktop` not installed (NOTE-48).
 
 ### 4.5 Storage and shares
 
@@ -716,7 +718,7 @@ Until batch 5, the router shows a clear "could not be shown" state for a page wh
 - **Parity.**
   - `/etc/nimbus/snapraid.conf` has one or two parity disks (each at least as large as the largest data disk), a content file in `/var/lib/nimbus-privd` plus one on each data disk, and excludes `.recycle/`.
   - `nimbus-snapraid-run` syncs nightly, scrubs 8 % of blocks older than 10 days once a week after a good sync, and records the result.
-  - `snapraid.status` adds `snapraid diff` counts, cached 10 minutes. These count changed files, not bytes, so batch 5's "unprotected data" alert uses that count.
+  - `snapraid.status` adds `snapraid diff` counts, cached 10 minutes. (This said the alert would use the file count; batch 5 added the bytes, so the 10 GB rule is the spec's, NOTE-69.)
   - Turning parity off keeps the old configuration in `/var/lib/nimbus-privd`.
 - **Shares.**
   - Folders are `root:nimbus-smb` 2775, made link-safe. Each share forces group `nimbus-smb`, create mode 0664 and directory mode 2775, so ISOs copied into the `isos` share are readable by QEMU (NOTE-67).
@@ -746,6 +748,56 @@ Until batch 5, the router shows a clear "could not be shown" state for a page wh
 - **Gap from deliverable 5, fixed here.** `nimbus-netfix.service` was enabled without its script, and the two NAS timers pointed at scripts that didn't exist. `bin/nimbus-netfix`, `nimbus-snapraid-run` and `nimbus-recycle-clean` now exist and are installed.
   - `nimbus-netfix` accepts libvirt's NAT traffic and frames inside the user's own bridges in Docker's `DOCKER-USER` chain. It adds each rule once, and does nothing without Docker.
   - `nimbus-control` now also Depends on `adduser`, `passwd` and `udev`.
+
+**NOTE-69 — Control Center, batch 5 of 5: Dashboard and metrics.** The Dashboard is the landing page. It has a header with the hostname and a Live indicator; four cards (CPU, Memory, Network, Storage); "Where your resources go"; "Needs attention"; the Docker apps and VMs panels; and Quick open. Checked against Docker 29.10 (API 1.57), libvirt 11.3.0 and SnapRAID 12.4.
+- **Where the code is.**
+  - The backend is `metrics_service.py` (the collector and its two routes), `docker_stream.py` (Docker's streaming API) and `alerts.py` (the rules).
+  - The frontend is `views/dashboard.js` and `lib/charts.js` (sparklines and stacked bars as inline SVG, no library).
+  - The VM console dialog moved from `views/vms.js` to `lib/vnc.js`, so the Dashboard opens the same one.
+  - No new lines in `debian/install` were needed: everything sits in folders batch 1 already installs.
+- **Host numbers.**
+  - psutil's `cpu_percent()` keeps one global "since the last call" state, so the collector and the sidebar's `/api/system` would shorten each other's intervals. The collector computes CPU % from its own `cpu_times()` deltas instead, and subtracts `guest` and `guest_nice`, which Linux already counts in `user` and `nice`.
+  - Network is the default-route interface, read from `/proc/net/route`.
+  - Temperature tries `coretemp`, `k10temp`, `zenpower`, `cpu_thermal` and `acpitz`, in that order. With none, the card leaves it out.
+- **Docker.**
+  - `docker_stream.py` speaks HTTP/1.1 to the Unix socket with asyncio, handling chunked and plain bodies, one JSON document per line. Each reader is a task that is cancelled when its container goes away: no thread per container and no `docker stats` subprocess.
+  - CPU is `cpu_delta / system_delta × online_cpus × 100` (Docker's own figure, 100 % per core), divided by `online_cpus` for a share of the host.
+  - Memory is `usage − inactive_file` (`total_inactive_file` on cgroup v1).
+  - Readers are reconciled with the container list every 10 s. `/events` (die, oom, health_status, restart, start, stop, destroy, create) wakes the collector at once, with a 0.3 s debounce.
+  - A restart history per app (3 in 5 minutes) gives the restart-loop alert.
+- **VMs.**
+  - One `getAllDomainStats()` call per sample, which includes stopped VMs.
+  - CPU is shown both as a share of the host and as % of the VM's own vCPUs. Memory is `balloon.rss`, or the configured memory without it.
+  - The timestamp for the CPU delta is taken at the call, not at the start of the sample.
+- **Storage.**
+  - `statvfs` of the pool and the system disk, every sample.
+  - SMART and parity come from a copy. `refresh_storage()` fetches privd's `disk.list` and `snapraid.status` 60 s after start and then hourly; both answer from privd's caches, and SMART is read with `--nocheck=standby`. The Storage page's overview also hands its reading over.
+  - So opening the Dashboard never runs smartctl or snapraid.
+- **Found while testing: two samples at once.** The first `GET /api/dashboard` sampled inline while the loop's first sample was still running. The two shared the CPU-time baselines, and a VM showed 117 % of the host.
+  - Samples now run under one lock, and the GET samples only if nothing has yet, inside that lock.
+  - `test_samples_never_overlap` covers it.
+- **Found while testing: libvirt's paused reasons.** Batch 3's table called reason 10 "disk space ran out" and 13 "a crash". In libvirt's `virDomainPausedReason`, 10 is a guest crash and 13 is a failed post-copy migration; 4 (dumping) was missing.
+  - The table is corrected, and `state_of()` maps state and reason together; shut off with reason 3 also counts as crashed.
+  - `test_vm_libvirt.py` now pauses a real VM and reads "paused by the user" (reason 1) back.
+- **Found by the real SnapRAID: unprotected bytes.** NOTE-68 counted changed files, but the spec's alert is "more than 10 GB unprotected". `snapraid.status` now also sums the sizes of the files `snapraid diff` lists as added, updated, restored, moved, copied or relocated.
+  - The first parser assumed lines like `add disk1/media/x`. A real diff names the file by its path inside its disk, shell-escaped: `add media/my\ film\ \(1\).mkv`. So it always found 0 bytes, which `nas-integration.sh` caught.
+  - privd now unescapes the path and looks it up on the data disks. Links count as themselves; directories, `..` and absolute paths are skipped.
+  - The `old -> new` form of move, copy and relocate lines comes from SnapRAID's source (`cmdline/scan.c`). A container can't produce those lines: without disk UUIDs, SnapRAID reports a move as remove + add. Deliverable 11's QEMU test, with real disks, checks them.
+- **Alerts.** Each alert has a stable id, a severity (bad, warn, info), a title, an optional detail and one action. The actions use the same APIs as the tabs:
+  - **Fix** opens the app's Edit dialog at the setting `GET /api/apps/<name>/diagnose` names: a host port that another app or another program holds (found with psutil), a volume folder that isn't there, or an empty required variable. Otherwise a toast gives the reason and points to Logs.
+  - **Start** or **Open VMs**, **Open disks**, **Sync now**, **Install updates**, **See what's new**.
+  - "Exited unexpectedly" means the stack's desired state is "running", so stopping an app is not an alert. Nothing is raised for an app while a job works on it.
+  - Beyond the spec: the system disk over 90 % full, a failed `wsdd2` unit, NVMe media errors, a set-up disk that is missing, and a failed last parity sync.
+- **Delivery.**
+  - `GET /api/dashboard` returns the latest sample with an hour of history.
+  - `WS /ws/metrics` pushes each sample. Each client has a queue of 3, so a slow window skips samples and never holds up the collector.
+  - Sampling stops 10 s after the last client or GET.
+  - The Live indicator shows when the socket is down; the page reconnects with backoff (1, 2, 4 … 30 s) and fetches the snapshot again.
+- **Layout: a deviation.** "Needs attention" sits beside "Where your resources go", near the top, not at the bottom of the page: alerts are what the user acts on first. At 800 px it stacks under the split.
+- **What could and couldn't be checked here.** Rootless Podman gives dockerd no cgroups, so no container can run in the dev container.
+  - `docker-streams.sh` checks the protocol against a real Docker 29.10: events, the stats stream, its fields, and Docker's error message.
+  - The CPU and memory formulas are checked with fixtures shaped like Docker's documents.
+  - Real numbers are compared with `docker stats` and `virsh domstats` in deliverable 11's QEMU test.
 
 ### Found by the Trixie archive check (deliverable 3)
 
@@ -1048,6 +1100,22 @@ How to read it: the NimbusOS and Docker repositories offer `bash` 99.0 and 98.0,
   - the parity explanation stuck to the list above it;
   - the wizard's confirm step didn't say which disk becomes what.
 
+**Deliverable 8, batch 5** (Dashboard and metrics, 2026-11-23, `dev-shell.sh`, NOTE-69):
+- **pytest, 432 passed** (25 new); 11 are skipped as before (Docker's CLI, libvirtd).
+  - `test_metrics` (15): the stream client (chunked documents split across reads, plain bodies, Docker's error message, a missing socket), the CPU and memory formulas (cgroup v1 and v2), `HostSampler`'s own CPU deltas, the split never below 0, a sample with containers (`FakeDockerd`) and VMs, history, samples never overlapping, a restart loop, an event waking the collector in under 1.5 s, sampling stopping without viewers, the storage copy, both routes, and a snapshot that is valid JSON.
+  - `test_alerts` (7): every rule and its action, the order by severity, and libvirt's state and reason mapping.
+  - `test_apps` (1): diagnose names the failing setting. `test_storage_privd` (2): `snapraid diff`'s escaped paths, and the unprotected bytes from a real diff's line forms.
+- **`docker-streams.sh`, 6 passed** (privileged throwaway container, Docker 29.10 from Docker's repository): `/events` delivers create and destroy through the collector's filter; `stats?stream=1` sends document after document with the fields the formulas read; the formulas accept a real document; an unknown container gives Docker's 404 message.
+- **`vm-libvirt.sh`, 7 passed** (libvirt 11.3.0, QEMU 10.0.13, TCG): the statistics call for a running VM (state, vCPUs, memory, resident size, CPU time moving), a VM paused with `virsh suspend` read back as "paused by the user", and a stopped VM in the same call.
+- **`nas-integration.sh`, 35 passed**: `snapraid.status` now also checks the unprotected size (two files, one named `my film (1).mkv`: 8 + 3 bytes). This found the parser bug in NOTE-69.
+- **`installed-smoke.sh`, 46 passed** (4 new): `views/dashboard.js` and `lib/charts.js` are served; `/api/dashboard` measures the host with the real psutil and reports Docker and libvirt down; `/ws/metrics` pushes a new sample about 2 seconds after the previous one.
+- **Package:** `nimbus-control` builds and is lintian-clean. The maintainer-script test passes 82 of 82.
+- **Screenshots looked at:** the Dashboard at 1400 px, full height and 800 px (cards with sparklines, the split with its legend, alerts with severity stripes and actions, apps and VMs with live usage, Quick open), and Fix opening dns's settings at the port another program holds. Fixed after looking:
+  - System & desktop showed 0 % (the preview's host load was below the apps' and VMs' sum);
+  - the preview's dashboard had no app usage under Chromium's virtual time, so the dashboard is now shot after real seconds;
+  - Quick open's tile letters were lowercase;
+  - Fix had nothing to highlight in the preview, so the preview now holds the failing app's port.
+
 **os-release, unattended-upgrades, Docker and Calamares** (`os-identity.test.sh`, NimbusOS os-release installed). Excerpts:
 
 ```
@@ -1102,10 +1170,10 @@ Facts confirmed by reading live-build `1:20250505+deb13u1`'s own scripts and Deb
 | 5 | Debian packaging (7 packages), in three parts | **Part 1:** `packages/{nimbusos-archive-keyring,nimbusos-docker-keyring,nimbusos-release,nimbusos-desktop}/**` (os-release, source, pinning with the `apt-cache policy` proof, unattended-upgrades drop-ins, `nimbus-update`, timers, Flathub setup, tests), plus `build-debs.sh` token rendering, mode normalization and `--only`. **Part 2 (done):** `packages/nimbusos-branding/**` (all themes and art, CC-BY-SA-4.0 text from SPDX, install test). **Part 3 (done):** `packages/{nimbus-control,nimbus-catalog}/{debian,tests}/**`, plus the parts of `control-center/` the packaging runs: `systemd/*` (all units), `data/samba/nimbus.conf`, `bin/nimbus-migrate`, `migrations/0001_initial.py` and `tests/test_migrate.py` (NOTE-58 to NOTE-61) |
 | 6 | Live hooks (done) | `build/config/hooks/live/{0100,0200,0300,0900}-*.hook.chroot`, `nimbus_check_image_initrd` in `build/lib/common.sh` (instead of a hook 9990, NOTE-62), `tools/tests/{hooks,image-initrd-check}.test.sh` |
 | 7 | Live-only files and boot menus (done) | `build/config/includes.chroot_after_packages/**`, `build/config/bootloaders/**`, hook `0400-live-manifest`, the verify hook's installer checks, `--bootappend-live-failsafe` and `nimbus_prepare_grub_theme` in `build/lib/common.sh`, `tools/tests/{live-files,bootloaders}.test.sh` (NOTE-63, NOTE-64) |
-| 8 | Nimbus Control Center, in five batches (NOTE-65) | **Batch 1 (done):** backend core (app, auth, errors, config, fonts, privd client, system, updates), `nimbus_common` (validate, protocol), privd (server, registry, runner, audit, updates, system), launcher and Grant access, desktop file and polkit action, the whole design system (`style.css`, `lib/{api,ui,icons}.js`, `app.js`), `views/updates.js`, tests. **Batch 2 (done, NOTE-66):** `backend/nimbus_control/{manifest,catalog,compose,apps_service,jobs,docker_api,state}.py`, privd `stacks.py`, the validators for apps, form components in `lib/ui.js`, `views/apps.js`, the fixture catalog and `test_{manifest,compose,apps}.py`, privd stack tests, Apps checks in `installed-smoke.sh`, Apps scenes in `ui_preview.py`. **Batch 3 (done, NOTE-67):** `backend/nimbus_control/{libvirt_api,vm_xml,vm_service,iso_library}.py`, the VM validators and settings, `views/vms.js`, `lib/vnc.js`, `console.{html,js}`, the CSP for websockify, `test_{vm_xml,isos,vms,vm_libvirt}.py`, `tests/integration/vm-libvirt.sh`, VM checks in `installed-smoke.sh`, VM scenes and `--live-vm` in `ui_preview.py`. **Batch 4 (done, NOTE-68):** privd `storage.py`, `samba.py`, `fsutil.py`, `nimbus_common/shares.py`, `backend/nimbus_control/{storage_service,shares_service}.py`, settings in `state.py`, `views/{storage,settings}.js`, `bin/{nimbus-netfix,nimbus-snapraid-run,nimbus-recycle-clean}`, the Samba drop-in's new sections, `test_{storage_privd,samba_privd,nas_api,nas_scripts}.py`, `tests/integration/nas-integration.sh`, NAS checks in `installed-smoke.sh`, storage scenes in `ui_preview.py`. **Batch 5:** Dashboard and metrics. Each batch adds its lines to `packages/nimbus-control/debian/install` (NOTE-61) |
+| 8 | Nimbus Control Center, in five batches (done, NOTE-65) | **Batch 1 (done):** backend core (app, auth, errors, config, fonts, privd client, system, updates), `nimbus_common` (validate, protocol), privd (server, registry, runner, audit, updates, system), launcher and Grant access, desktop file and polkit action, the whole design system (`style.css`, `lib/{api,ui,icons}.js`, `app.js`), `views/updates.js`, tests. **Batch 2 (done, NOTE-66):** `backend/nimbus_control/{manifest,catalog,compose,apps_service,jobs,docker_api,state}.py`, privd `stacks.py`, the validators for apps, form components in `lib/ui.js`, `views/apps.js`, the fixture catalog and `test_{manifest,compose,apps}.py`, privd stack tests, Apps checks in `installed-smoke.sh`, Apps scenes in `ui_preview.py`. **Batch 3 (done, NOTE-67):** `backend/nimbus_control/{libvirt_api,vm_xml,vm_service,iso_library}.py`, the VM validators and settings, `views/vms.js`, `lib/vnc.js`, `console.{html,js}`, the CSP for websockify, `test_{vm_xml,isos,vms,vm_libvirt}.py`, `tests/integration/vm-libvirt.sh`, VM checks in `installed-smoke.sh`, VM scenes and `--live-vm` in `ui_preview.py`. **Batch 4 (done, NOTE-68):** privd `storage.py`, `samba.py`, `fsutil.py`, `nimbus_common/shares.py`, `backend/nimbus_control/{storage_service,shares_service}.py`, settings in `state.py`, `views/{storage,settings}.js`, `bin/{nimbus-netfix,nimbus-snapraid-run,nimbus-recycle-clean}`, the Samba drop-in's new sections, `test_{storage_privd,samba_privd,nas_api,nas_scripts}.py`, `tests/integration/nas-integration.sh`, NAS checks in `installed-smoke.sh`, storage scenes in `ui_preview.py`. **Batch 5 (done, NOTE-69):** `backend/nimbus_control/{metrics_service,docker_stream,alerts}.py`, `apps_service.diagnose`, libvirt's statistics call and state mapping, unprotected bytes in privd `storage.py`, `views/dashboard.js`, `lib/charts.js`, the console dialog in `lib/vnc.js`, navigation intents in `app.js`, `test_{metrics,alerts}.py`, `tests/integration/docker-streams.sh`, Dashboard checks in `installed-smoke.sh`, `vm-libvirt.sh` and `nas-integration.sh`, Dashboard scenes in `ui_preview.py`. Each batch adds its lines to `packages/nimbus-control/debian/install` (NOTE-61) |
 | 9 | Catalog | `catalog/SCHEMA.md`, `catalog/manifest.schema.json` (with `template_version`, NOTE-60), 10 apps |
 | 10 | CI/CD and docs (CI also runs `tools/tests/*.test.sh` and `tools/fetch-docker-key.sh --verify-local` / `--check`) | `.github/workflows/*`, `.github/dependabot.yml`, `apt/conf/*`, `tools/{publish-apt.sh,releases-json.py,split-iso.sh,pin-actions.sh}`, `control-center/tests/integration/samba-ucf-keeps-include.sh`, `README.md`, `LICENSE`, `LICENSES/*`, `.shellcheckrc`, `ruff.toml`, `docs/{RELEASING,SIGNING}.md`, `docs/release-notes/v0.1.0.md` |
-| 11 | Testing (the smoke test includes `systemctl --user show-environment \| grep XDG_CONFIG_DIRS` and kinfocenter's About page after a graphical login, NOTE-55) | `docs/TESTING.md`, `tools/qemu-test.sh` |
+| 11 | Testing (the smoke test includes `systemctl --user show-environment \| grep XDG_CONFIG_DIRS` and kinfocenter's About page after a graphical login, NOTE-55; the Dashboard's Docker and VM numbers against `docker stats` and `virsh domstats`, and SnapRAID move lines on real disks, NOTE-69) | `docs/TESTING.md`, `tools/qemu-test.sh` |
 
 ---
 

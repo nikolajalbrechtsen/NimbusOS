@@ -10,7 +10,7 @@
 #           the host's disks are visible (docs/TESTING.md tests it in QEMU);
 #         - pool.apply: the mergerfs pool mounted from its fstab line, then
 #           Pooled + parity with a real "snapraid sync" (nimbus-snapraid-run)
-#           and snapraid.status's diff counts;
+#           and snapraid.status's diff counts and unprotected bytes;
 #         - SMB users through smbuser.add (adduser + smbpasswd on stdin);
 #         - share.apply with the packaged nimbus.conf: testparm, smbd reload,
 #           Avahi with _adisk, the isos share bound onto the ISO library;
@@ -161,7 +161,8 @@ echo "film" >/mnt/user/media/film.mkv
 check "nimbus-snapraid-run syncs (and scrubs the first time)" sh -c 'python3 "$1/bin/nimbus-snapraid-run" >/tmp/snapraid.log 2>&1' _ "$CC"
 check "its status records a good sync" python3 -c 'import json; s = json.load(open("/var/cache/nimbus-privd/snapraid-status.json")); assert s["last_sync_ok"] and s["last_scrub_ok"]'
 echo "another" >/mnt/user/media/new.mkv
-check "snapraid.status counts the unprotected change" sh -c 'python3 /tmp/privd.py "$1" snapraid.status | python3 -c "import json,sys; s=json.load(sys.stdin); assert s[\"diff\"][\"unprotected\"] >= 1, s"' _ "$CC"
+echo "ab" >"/mnt/user/media/my film (1).mkv"         # snapraid escapes it: my\ film\ \(1\).mkv
+check "snapraid.status counts the unprotected changes and their size (8 + 3 bytes)" sh -c 'python3 /tmp/privd.py "$1" snapraid.status | python3 -c "import json,sys; s=json.load(sys.stdin); assert s[\"diff\"][\"unprotected\"] >= 1 and s[\"diff\"][\"bytes\"] == 11, s"' _ "$CC"
 
 echo "Removing"
 check "share.delete_data refuses a share that is still exported" sh -c '! python3 /tmp/privd.py "$1" share.delete_data "{\"name\": \"drop\", \"location\": \"system\"}"' _ "$CC"

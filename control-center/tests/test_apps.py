@@ -16,7 +16,9 @@
 #           leaves nothing behind;
 #         - status (running, starting, stopped, error with the reason, Docker
 #           down), web UI links, live logs over WebSocket;
-#         - one job per app at a time; job errors in plain words.
+#         - one job per app at a time; job errors in plain words;
+#         - diagnose (the dashboard's Fix): a port another program holds, a
+#           folder that isn't there, else the reason.
 # Why:  spec Tab A; docs/PLAN.md NOTE-18, NOTE-29, NOTE-30, NOTE-31, NOTE-60.
 # =============================================================================
 
@@ -564,3 +566,24 @@ def test_one_job_per_app_and_plain_errors():
         follow = [item async for item in first.follow()]
         assert follow[0] == ("log", "waiting") and follow[-1][0] == "done"
     asyncio.run(main())
+
+
+# --- the dashboard's Fix ------------------------------------------------------------------------
+def test_diagnose_names_the_setting(w):
+    install(w)
+    (w.stacks / "demo-web" / "config").mkdir(parents=True, exist_ok=True)
+    w.listening.append(Conn(Addr("0.0.0.0", 8080), socket.SOCK_STREAM, psutil.CONN_LISTEN))     # it isn't running
+    diagnose = lambda: w.client.get("/api/apps/demo-web/diagnose", headers=w.h).json()        # noqa: E731
+    assert diagnose() == {"field": "ports.0.host",
+                          "message": "Port 8080/tcp is used by another program on this computer. Use 8081 instead."}
+    w.listening.clear()
+    shutil.rmtree(w.media)
+    found = diagnose()
+    assert found["field"] == "volumes.1.source" and f"{w.media} isn't there" in found["message"]
+    w.media.mkdir()
+    assert diagnose() == {"field": None, "message": "Its containers are missing. Start it to create them again. "
+                                                    "Its log (Logs) usually says why."}
+    w.docker.items[:] = [container("demo-web", "web", ports=[("tcp", 8080)])]
+    w.listening.append(Conn(Addr("0.0.0.0", 8080), socket.SOCK_STREAM, psutil.CONN_LISTEN))     # its own port now
+    assert diagnose()["field"] is None
+    assert w.client.get("/api/apps/nope/diagnose", headers=w.h).status_code == 404

@@ -24,14 +24,17 @@
 #                       parity (/etc/nimbus/snapraid.conf, parity at least as
 #                       large as every data disk)
 #       snapraid.status the last sync and scrub (nimbus-snapraid-run) and
-#                       "snapraid diff" counts (cached 10 minutes)
+#                       what "snapraid diff" lists: counts, and the size of
+#                       the files not yet protected (cached 10 minutes)
 #       snapraid.sync_now  starts nimbus-snapraid-sync.service
 # Why:  spec Tab C (Disks, Pool); docs/PLAN.md §4.5, NOTE-26, NOTE-68.
 # =============================================================================
 
+import collections
 import json
 import os
 import re
+import stat
 import time
 
 from nimbus_common import shares as S
@@ -440,6 +443,59 @@ def parse_diff(output):
     return counts
 
 
+CHANGED = re.compile(r"(add|update|restore|move|copy|relocate) (.+)")       # snapraid's cmdline/scan.c
+
+
+def term_paths(text):
+    """The paths in snapraid's terminal form of a diff line's file: shell
+    escaping ("my\\ film\\ \\(1\\).mkv"; a backslash keeps the next
+    character), and an unescaped " -> " between a move's, copy's or
+    relocation's old and new path (spaces in names are always escaped, so
+    it can't be part of one)."""
+    paths, current, i = [], [], 0
+    while i < len(text):
+        if text[i] == "\\" and i + 1 < len(text):
+            current.append(text[i + 1])
+            i += 2
+        elif text.startswith(" -> ", i):
+            paths.append("".join(current))
+            current, i = [], i + 4
+        else:
+            current.append(text[i])
+            i += 1
+    return paths + ["".join(current)]
+
+
+def unprotected_bytes(output, data_labels):
+    """The size of the files "snapraid diff" lists as added, updated,
+    restored, moved, copied or relocated: what a failed disk would lose today.
+    snapraid names a file by its path inside its disk, not by the disk
+    ("add media/new.mkv", read from a real diff in nas-integration.sh), so
+    it is looked up on the data disks; a path listed again (changed on two
+    disks) counts on the next disk that holds it."""
+    listed = collections.Counter()
+    total = 0
+    for line in output.splitlines():
+        m = CHANGED.fullmatch(line)
+        if not m:
+            continue
+        path = term_paths(m.group(2))[-1]
+        if not path or path.startswith("/") or ".." in path.split("/"):
+            continue
+        sizes = []
+        for label in sorted(data_labels):
+            try:
+                st = os.lstat(f"{S.DISKS}/{label}/{path}")
+            except OSError:
+                continue
+            if not stat.S_ISDIR(st.st_mode):                 # a link counts as itself, never its target
+                sizes.append(st.st_size)
+        if listed[path] < len(sizes):
+            total += sizes[listed[path]]
+        listed[path] += 1
+    return total
+
+
 @REGISTRY.verb("snapraid.status", lock="snapraid-status")
 def snapraid_status(ctx, args):
     out = {"configured": os.path.exists(SNAPRAID_CONF), "installed": os.path.exists(SNAPRAID)}
@@ -459,10 +515,12 @@ def snapraid_status(ctx, args):
             cached = None
         if not cached or time.time() - cached.get("checked", 0) > 600:
             proc = runner.run([SNAPRAID, "-c", SNAPRAID_CONF, "diff"], timeout=600, check=False)
-            cached = {"counts": parse_diff(proc.stdout), "exit": proc.returncode, "checked": int(time.time())}
+            labels = {e["label"] for e in fsutil.read_block() if e["kind"] == "disk" and e["role"] == "data"}
+            cached = {"counts": parse_diff(proc.stdout), "bytes": unprotected_bytes(proc.stdout, labels),
+                      "exit": proc.returncode, "checked": int(time.time())}
             fsutil.write_atomic(SNAPRAID_DIFF, json.dumps(cached), 0o600)
         changed = sum(cached["counts"].get(k, 0) for k in DIFF_KEYS if k != "equal")
-        out["diff"] = {**cached, "unprotected": changed}
+        out["diff"] = {**cached, "unprotected": changed, "bytes": cached.get("bytes", 0)}
     return out
 
 

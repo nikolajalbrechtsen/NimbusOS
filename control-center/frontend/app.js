@@ -12,6 +12,7 @@
 //          refreshed every 5 seconds;
 //       3. routes #dashboard #apps #vms #storage #updates #settings to
 //          views/<name>.js, each exporting render(root, ctx) -> cleanup;
+//          ctx.navigate(page, intent) can hand the page a one-time intent;
 //       4. the search palette: sections, plus whatever the views register
 //          (apps, VMs, shares).
 // Why:  spec "App shell" and "Behavior".
@@ -187,10 +188,24 @@ async function route() {
   content.focus({ preventScroll: true });
 }
 
+// navigate(id, intent): show a page; INTENT (for example {fix: "jellyfin"}) is
+// handed once to that page through takeIntent(id), so the Dashboard can open
+// an app's Edit dialog or a Storage tab directly.
+let pendingIntent = null;
 const context = {
   api,
   ui,
-  navigate: (id) => { location.hash = `#${id}`; },
+  navigate: (id, intent = null) => {
+    pendingIntent = intent ? { id, ...intent } : null;
+    if (location.hash === `#${id}`) route();
+    else location.hash = `#${id}`;
+  },
+  takeIntent: (id) => {
+    if (!pendingIntent || pendingIntent.id !== id) return null;
+    const intent = pendingIntent;
+    pendingIntent = null;
+    return intent;
+  },
   refreshSummary,
   registerSearch(provider) { searchProviders.add(provider); return () => searchProviders.delete(provider); },
 };

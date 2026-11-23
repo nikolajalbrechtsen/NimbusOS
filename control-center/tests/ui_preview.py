@@ -5,7 +5,10 @@
 #       screenshots with headless Chromium.
 #       Default mode, on made-up data: FakePrivd (canned update status and
 #       history), FakeDocker (four demo apps: running, error, starting and
-#       stopped; one with a template update), the fixture catalog, and a
+#       stopped; one with a template update; the failing one's host port held
+#       by a listener here, for the Dashboard's Fix) with a FakeDockerd thread
+#       streaming their stats, PreviewHost (an hour of gently drifting
+#       history), the fixture catalog, and a
 #       FakeLibvirt with four VMs (running Linux with usage, paused on a disk
 #       error, stopped Windows that starts with the computer, one made by
 #       another tool) and three ISOs:
@@ -45,6 +48,7 @@ import json
 import os
 import pathlib
 import shutil
+import socket
 import subprocess
 import sys
 import tempfile
@@ -57,7 +61,8 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 
 import uvicorn  # noqa: E402
 
-from conftest import CC, FIXTURE_CATALOG, FakeDocker, FakeLibvirt, FakeNas, FakePrivd, container, nas_disk  # noqa: E402
+from conftest import (CC, FIXTURE_CATALOG, FakeDocker, FakeDockerd, FakeLibvirt, FakeNas, FakePrivd, container,  # noqa: E402
+                      docker_stats, nas_disk)
 from nimbus_common import shares as S  # noqa: E402
 from nimbus_control import compose, vm_xml  # noqa: E402
 from nimbus_control.app import create_app  # noqa: E402
@@ -82,6 +87,7 @@ SCENES = {
     "vms-create-windows": ("vms", ["Create VM", "Windows*"]),
     "vms-options": ("vms", ["Options: CD drive, start with the computer@2"]),
     "vms-delete": ("vms", ["Delete@0"]),
+    "dashboard-fix": ("dashboard", ["Fix@0"]),
     "storage-disks": ("storage", ["Disks"]),
     "storage-pool": ("storage", ["Pool"]),
     "storage-users": ("storage", ["Users"]),
@@ -192,7 +198,7 @@ def build_vms(tmp):
             "drivers_iso": drivers and str(isos / drivers), "network": {"mode": "nat"}, "vnc_password": "Pr3view0",
             "created": "2026-11-10T08:00:00+00:00"}))
         lv.vms[name].update(state=st, autostart=auto)
-    lv.vms["backup-test"]["reason"] = "paused by a disk error (is the disk full?)"
+    lv.vms["backup-test"].update(reason="paused by a disk error (is the disk full?)", problem=True)
     foreign = (pathlib.Path(__file__).parent / "test_vm_xml.py").read_text().split('FOREIGN = """')[1].split('"""')[0]
     lv.vms["legacy-vm"] = {"xml": foreign.replace("old-vm", "legacy-vm"), "state": "stopped", "autostart": False,
                            "uuid": "11111111-2222-3333-4444-555555555555", "cpu_time": 0}
@@ -341,6 +347,49 @@ def build_nas(tmp, state):
     return PreviewNas(), specs
 
 
+# --- the dashboard ------------------------------------------------------------------------------------
+class PreviewHost:
+    """A host whose load drifts gently, and its last hour of samples."""
+
+    @staticmethod
+    def at(t):
+        import math
+        return {"cpu": 33 + 9 * math.sin(t / 300) + 4 * math.sin(t / 37), "memory": (21.5 + 1.5 * math.sin(t / 900)) * 1024 ** 3,
+                "rx": max(0.0, 2.4e6 + 2e6 * math.sin(t / 120)), "tx": max(0.0, 3e5 + 2.5e5 * math.sin(t / 90))}
+
+    def sample(self, now):
+        v = self.at(time.time())
+        return {"cpu": v["cpu"], "cores": [v["cpu"]] * 16, "threads": 16, "load": [3.84, 3.2, 2.9],
+                "memory": {"total": 64 * 1024 ** 3, "used": v["memory"], "available": 64 * 1024 ** 3 - v["memory"]},
+                "swap": {"total": 8 * 1024 ** 3, "used": 0}, "net": {"iface": "enp5s0", "rx": v["rx"], "tx": v["tx"]},
+                "temperature": 47.0}
+
+    def fill(self, history):
+        now = time.time()
+        for i in range(1800):
+            t = now - (1800 - i) * 2
+            v = self.at(t)
+            for key, value in (("t", t), ("cpu", v["cpu"]), ("memory", v["memory"]), ("net_rx", v["rx"]), ("net_tx", v["tx"])):
+                history[key].append(value)
+
+
+def start_dockerd(path, docker):
+    """A FakeDockerd in its own thread, streaming steady stats for the running containers."""
+    shares = {"demo-web": (3.1e9, 900 * 2 ** 20), "monitor": (0.4e9, 210 * 2 ** 20)}
+    ready = threading.Event()
+
+    async def main():
+        d = await FakeDockerd(path, interval=1.0).start()
+        for c in docker.items:
+            cpu, mem = shares.get(c["project"], (0.2e9, 60 * 2 ** 20))
+            d.stats[c["id"]] = [docker_stats(total=1e10 + cpu, system=2e12 + 32e9, pre_total=1e10, pre_system=2e12, online=16,
+                                             usage=mem + 50 * 2 ** 20, inactive=50 * 2 ** 20)]
+        ready.set()
+        await asyncio.Event().wait()
+    threading.Thread(target=lambda: asyncio.run(main()), daemon=True).start()
+    ready.wait(5)
+
+
 # --- the two modes -----------------------------------------------------------------------------------
 def preview(out, pages):
     tmp = pathlib.Path(tempfile.mkdtemp())
@@ -351,19 +400,28 @@ def preview(out, pages):
     (tmp / "tokens").mkdir()
     settings = Settings(run_dir=str(tmp), www_dir=str(www), os_release=str(tmp / "os-release"), state_dir=str(state),
                         catalog_dir=str(FIXTURE_CATALOG), logo_path=str(CC.parent / "packages/nimbusos-branding/art/logo.svg"),
-                        isos_dir=str(isos), vnc_tokens_dir=str(tmp / "tokens"))
+                        isos_dir=str(isos), vnc_tokens_dir=str(tmp / "tokens"), docker_socket=str(tmp / "docker.sock"))
     privd = FakePrivd({"update.history": HISTORY})
     nas.install(privd)
-    app = create_app(settings, privd=privd, docker=docker, libvirt=lv, bridges=lambda: ["br0"])
+    start_dockerd(tmp / "docker.sock", docker)
+    # Another program holds dns's admin port: why its container exited, and
+    # what the Dashboard's Fix finds and highlights (ui-dashboard-fix.png).
+    held = socket.create_server(("127.0.0.1", 8081))  # noqa: F841 (open until the screenshots are done)
+    host = PreviewHost()
+    app = create_app(settings, privd=privd, docker=docker, libvirt=lv, bridges=lambda: ["br0"], host_sampler=host)
+    host.fill(app.app.state.metrics.history)
+    asyncio.run(app.app.state.metrics.refresh_storage())          # what the hourly refresh keeps
     usage = app.app.state.shares.usage
     for s, used in zip(specs, (2.9e12, 41e9, 380e9, 212e9, 1.2e9)):
         usage.cache[S.share_path(s)] = (time.monotonic(), int(used), True)
     server = serve(app)
     codes = app.app.state.codes
     for page in pages:
-        shot(out / f"ui-{page}.png", page_url(codes, page))
-        shot(out / f"ui-{page}-full.png", page_url(codes, page), height=1800)
-        shot(out / f"ui-{page}-800.png", page_url(codes, page), width=800)
+        # The Dashboard is live: its numbers arrive over a WebSocket in real seconds.
+        take = (lambda p, u, **kw: live_shot(p, u, wait=6, **kw)) if page == "dashboard" else shot
+        take(out / f"ui-{page}.png", page_url(codes, page))
+        take(out / f"ui-{page}-full.png", page_url(codes, page), height=1800)
+        take(out / f"ui-{page}-800.png", page_url(codes, page), width=800)
     for name, (page, clicks) in SCENES.items():
         if page in pages:
             shot(out / f"ui-{name}.png", page_url(codes, page, clicks), height=1000 if "create" in name else 900)
@@ -423,7 +481,7 @@ def main(argv):
         return 0
     out = pathlib.Path(argv[1])
     out.mkdir(parents=True, exist_ok=True)
-    preview(out, argv[2:] or ["updates", "apps", "vms", "storage", "settings"])
+    preview(out, argv[2:] or ["dashboard", "updates", "apps", "vms", "storage", "settings"])
     return 0
 
 

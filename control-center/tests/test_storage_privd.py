@@ -417,7 +417,7 @@ def test_pool_refused_in_the_live_session(fake, monkeypatch):
 # --- parity status ----------------------------------------------------------------------------------
 DIFF = """Loading state from /var/lib/nimbus-privd/snapraid.content...
 Comparing...
-add disk1/films/new.mkv
+add films/new.mkv
    41522 equal
        3 added
        1 removed
@@ -432,6 +432,31 @@ There are differences!
 def test_parse_diff():
     assert storage.parse_diff(DIFF) == {"equal": 41522, "added": 3, "removed": 1, "updated": 2, "moved": 0,
                                         "copied": 0, "restored": 0}
+
+
+def test_term_paths():
+    assert storage.term_paths(r"media/my\ film\ \(1\).mkv") == ["media/my film (1).mkv"]
+    assert storage.term_paths(r"a\\b/c\'d.mkv") == ["a\\b/c'd.mkv"]
+    assert storage.term_paths(r"old.mkv -> new\ \-\>\ x.mkv") == ["old.mkv", "new -> x.mkv"]
+
+
+def test_unprotected_bytes(env):
+    # The line forms are a real "snapraid diff"'s (nas-integration.sh): the
+    # path inside its disk, shell-escaped; UTF-8 as it is.
+    sizes = {"disk1/films/my film (1).mkv": 7_000_000, "disk2/notes.txt": 5, "disk1/films/same.mkv": 100,
+             "disk2/films/same.mkv": 20, "disk2/films/ä'b.mkv": 3, "disk2/films/moved.mkv": 40,
+             "disk1/films/relocated.mkv": 9}
+    for path, size in sizes.items():
+        os.makedirs(os.path.dirname(f"{S.DISKS}/{path}"), exist_ok=True)
+        with open(f"{S.DISKS}/{path}", "wb") as f:
+            f.truncate(size)
+    os.symlink("/etc/passwd", f"{S.DISKS}/disk1/link")
+    output = ("Comparing...\n"
+              "add films/my\\ film\\ \\(1\\).mkv\nupdate notes.txt\nremove old.txt\nadd link\n"
+              "add films/same.mkv\nadd films/same.mkv\nadd films/ä\\'b.mkv\nmove films/old.mkv -> films/moved.mkv\n"
+              "relocate lost/a.mkv -> films/relocated.mkv\nadd films\nadd gone.bin\nadd ../../etc/shadow\nadd /etc/shadow\n"
+              "       1 added\n")
+    assert storage.unprotected_bytes(output, {"disk1", "disk2"}) == sum(sizes.values()) + len("/etc/passwd")
 
 
 def test_snapraid_status(fake, env, monkeypatch):
