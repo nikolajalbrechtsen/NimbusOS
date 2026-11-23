@@ -251,7 +251,7 @@ ls /usr/lib/nimbusos-live
 - `EFI/` holds `nimbusos` and `BOOT`.
 - Used space on `/` is well under the installer's 32 GB minimum (PLAN
   NOTE-63). Write the figure down.
-- `XDG_CONFIG_DIRS=/etc/xdg/nimbusos:/etc/xdg` (PLAN NOTE-55).
+- `XDG_CONFIG_DIRS=/home/tester/.config/kdedefaults:/etc/xdg/nimbusos:/etc/xdg`: Plasma puts the user's `kdedefaults` first by itself, and `/etc/xdg/nimbusos` comes before `/etc/xdg` (PLAN NOTE-55).
 - `tester` is in `docker`, `libvirt`, `kvm` and `nimbus-control`.
 - `/usr/lib/nimbusos-live` doesn't exist: the installer removed the
   live-only files.
