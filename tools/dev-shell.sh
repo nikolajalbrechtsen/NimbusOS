@@ -152,7 +152,14 @@ run_host() {
 		args+=(--privileged)
 	fi
 	if [[ -n "$work_volume" ]]; then
-		args+=(--volume "$work_volume:/var/lib/nimbus-work")
+		# live-build's chroot needs the device nodes debootstrap creates there
+		# (/dev/null and others). Podman mounts volumes nodev unless told
+		# otherwise; Docker's -v has no such option and doesn't need one.
+		if [[ "$engine" == podman ]]; then
+			args+=(--volume "$work_volume:/var/lib/nimbus-work:dev")
+		else
+			args+=(--volume "$work_volume:/var/lib/nimbus-work")
+		fi
 		printenv NIMBUS_WORK_DIR >/dev/null || args+=(--env NIMBUS_WORK_DIR=/var/lib/nimbus-work)
 	fi
 	for var in $(compgen -e); do

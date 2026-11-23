@@ -105,7 +105,7 @@ EOF
 }
 
 main() {
-	local version display free iso_src iso manifest size limit pkg initrd
+	local version display free iso_src iso manifest size limit pkg initrd opts
 	local -a branding_debs initrds
 	local -a build_args=()
 
@@ -160,6 +160,13 @@ main() {
 	mkdir -p -- "$work" "$out"
 	exec 9>"$work/.build.lock"
 	flock -n 9 || die "Another build is already running in $work."
+	# live-build's chroot lives in $work: it runs programs there and uses the
+	# device nodes debootstrap creates (/dev/null and others). On a nodev or
+	# noexec mount the build fails late, in a package's maintainer script.
+	opts=",$(findmnt -no OPTIONS --target "$work" 2>/dev/null || true),"
+	if [[ "$opts" == *,nodev,* || "$opts" == *,noexec,* ]]; then
+		die "$work is on a file system mounted with$([[ "$opts" == *,nodev,* ]] && echo ' nodev')$([[ "$opts" == *,noexec,* ]] && echo ' noexec'), which live-build's chroot can't work on. Set NIMBUS_WORK_DIR to a directory on another file system (with Podman volumes: mount them with the dev option, as tools/dev-shell.sh --work-volume does)."
+	fi
 	free="$(nimbus_free_gib "$work")"
 	((free >= NIMBUS_MIN_FREE_GIB)) \
 		|| die "Only ${free} GiB free on the file system of $work; at least ${NIMBUS_MIN_FREE_GIB} GiB are needed."
