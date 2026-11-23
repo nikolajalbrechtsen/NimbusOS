@@ -12,7 +12,11 @@
 #            code (valid once, for 30 seconds);
 #         3. replaces itself with Chromium in app mode on
 #            http://127.0.0.1:7777/?launch=<code> (window class NimbusControl,
-#            its own profile in ~/.local/share/nimbus-control/chromium).
+#            its own profile in ~/.local/share/nimbus-control/chromium, and
+#            --password-store=basic: the app window stores no passwords, and
+#            on Plasma Chromium would otherwise ask KDE Wallet to create a
+#            wallet first; those dialogs held the page until the launch code
+#            had expired, docs/PLAN.md NOTE-72).
 #       Problems are shown with kdialog, not just printed.
 # Why:  docs/PLAN.md NOTE-14 (the token is never on a command line, where
 #       every local user could read it in /proc) and NOTE-09.
@@ -110,8 +114,8 @@ def main():
     profile = os.path.join(data_home, "nimbus-control", "chromium")
     os.makedirs(profile, mode=0o700, exist_ok=True)
     os.execv(CHROMIUM, [CHROMIUM, f"--app={BASE}/?launch={code}", "--class=NimbusControl",
-                        f"--user-data-dir={profile}", "--no-first-run", "--no-default-browser-check",
-                        "--disable-features=Translate"])
+                        f"--user-data-dir={profile}", "--password-store=basic", "--no-first-run",
+                        "--no-default-browser-check", "--disable-features=Translate"])
     return 1
 
 
