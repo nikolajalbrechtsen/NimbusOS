@@ -684,6 +684,13 @@ nimbus_lb_config_args() {
 		--apt-options "--yes -o Acquire::Retries=5"
 		--debconf-frontend noninteractive
 
+		# CA certificates in the bootstrapped system: Docker's source
+		# (config/archives/docker.list.chroot) is HTTPS, and apt in the fresh
+		# chroot can't verify it without them ("certificate verify failed",
+		# so docker-ce can't be found). live-build adds them by itself only
+		# when the Debian mirror is HTTPS (docs/PLAN.md NOTE-72).
+		--debootstrap-options "--include=ca-certificates"
+
 		# live-boot initramfs; the Debian kernel flavour for amd64.
 		--initramfs live-boot
 		--linux-flavours "$NIMBUS_ARCH"
