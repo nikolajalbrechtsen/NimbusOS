@@ -126,7 +126,11 @@ jobs:
     runs-on: ubuntu-24.04
     container:
       image: docker.io/library/debian:trixie
-      options: ${{ matrix.privileged && '--privileged' || '--init' }}
+      # --init: a PID 1 that reaps orphaned processes. GitHub otherwise runs
+      # "tail -f /dev/null" as PID 1, which never reaps, so a QEMU process
+      # libvirt killed stays a zombie and libvirt reports "Failed to terminate
+      # process … Device or resource busy" (docs/PLAN.md NOTE-71).
+      options: ${{ matrix.privileged && '--privileged --init' || '--init' }}
     timeout-minutes: 45
     strategy:
       fail-fast: false
@@ -156,7 +160,7 @@ jobs:
             run: control-center/tests/integration/nas-integration.sh
             privileged: true
           - name: "Control Center: VMs (libvirt, QEMU, websockify)"
-            run: env NIMBUS_TEST_TCG=1 control-center/tests/integration/vm-libvirt.sh
+            run: control-center/tests/integration/vm-libvirt.sh
             privileged: true
           - name: "Control Center: Docker's streaming API"
             run: control-center/tests/integration/docker-streams.sh
