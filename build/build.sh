@@ -151,8 +151,10 @@ main() {
 	# --- 1. Host -------------------------------------------------------------
 	step "Build host"
 	nimbus_check_host
+	# apt-utils: live-build only Recommends it, but its binary_package-lists
+	# runs apt-ftparchive on the host to index the ISO's package pool.
 	nimbus_apt_install_missing live-build debootstrap devscripts dpkg-dev debhelper \
-		gpg gpgv curl ca-certificates git squashfs-tools xz-utils initramfs-tools-core
+		gpg gpgv curl ca-certificates git squashfs-tools xz-utils initramfs-tools-core apt-utils
 	export LC_ALL=C.UTF-8
 
 	work="$(nimbus_path "$NIMBUS_WORK_DIR")"
