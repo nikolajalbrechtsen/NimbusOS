@@ -1,0 +1,28 @@
+# =============================================================================
+# ruff.toml: Python lint settings for ci.yml (and tools/lint.sh)
+# =============================================================================
+# What: the rules ruff checks in every Python file, including the programs
+#       without a .py suffix: pycodestyle errors and warnings (E, W),
+#       pyflakes (F), bugbear (B) and pyupgrade for Python 3.13 (UP), which
+#       is Trixie's python3. Lines may be 140 characters long.
+# Why:  spec 4.3 (ci.yml runs ruff). ruff is a CI tool only, installed on the
+#       runner with pipx at a pinned version (docs/PLAN.md NOTE-43). The rule
+#       set is named here rather than taken from ruff's defaults, so a new
+#       ruff release can't change what CI checks.
+# =============================================================================
+
+target-version = "py313"
+line-length = 140
+extend-include = [
+    "control-center/bin/nimbus-control-open",
+    "control-center/bin/nimbus-control-server",
+    "control-center/bin/nimbus-grant-access",
+    "control-center/bin/nimbus-migrate",
+    "control-center/bin/nimbus-recycle-clean",
+    "control-center/bin/nimbus-snapraid-run",
+    "packages/nimbusos-release/nimbus-update/nimbus-update",
+]
+extend-exclude = ["_build", "build/work", "dist"]
+
+[lint]
+select = ["E", "W", "F", "B", "UP"]

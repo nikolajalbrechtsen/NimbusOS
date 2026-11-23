@@ -44,7 +44,7 @@ def _age(iso, now):
     except ValueError:
         return None
     if t.tzinfo is None:
-        t = t.replace(tzinfo=datetime.timezone.utc)
+        t = t.replace(tzinfo=datetime.UTC)
     return now - t.timestamp()
 
 
@@ -186,7 +186,7 @@ def update_alerts(status, now):
 
 def evaluate(*, apps=(), restart_loops=None, vms=None, storage=None, space=None, units=(), updates=None,
              limits=None, now=None):
-    now = now if now is not None else datetime.datetime.now(datetime.timezone.utc).timestamp()
+    now = now if now is not None else datetime.datetime.now(datetime.UTC).timestamp()
     limits = limits or {"hdd_temp_c": 50, "nvme_temp_c": 70}
     found = (app_alerts(apps, restart_loops or {}) + vm_alerts(vms or {}) + disk_alerts(storage, limits)
              + space_alerts(space) + parity_alerts((storage or {}).get("parity"), now) + unit_alerts(units)

@@ -350,7 +350,8 @@ TB = 4 * 1000 ** 4
 
 
 def nas_disk(name, role="unassigned", label=None, serial=None, size=TB, system=False, fstype=None):
-    return {"name": name, "path": f"/dev/{name}", "size": size, "model": "WDC WD40EFRX", "serial": serial if serial is not None else f"SN-{name}",
+    return {"name": name, "path": f"/dev/{name}", "size": size, "model": "WDC WD40EFRX",
+            "serial": serial if serial is not None else f"SN-{name}",
             "rotational": True, "transport": "sata", "removable": False, "system": system, "live": False,
             "mounted": role != "unassigned", "mounts": [], "role": role, "label": label, "fstype": fstype, "partitions": [],
             "smart": {"passed": True, "temperature": 35, "asleep": False}}

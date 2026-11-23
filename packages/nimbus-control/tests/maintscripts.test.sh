@@ -115,7 +115,8 @@ digest() {    # digest: checksums of all user data (paths relative to /)
 	 pdbedit -L 2>/dev/null | cut -d: -f1)
 }
 maintscripts_text() {   # the maintainer scripts of a .deb, comments removed
-	local d="$WORK/ctl-$(basename "$1")"
+	local d
+	d="$WORK/ctl-$(basename "$1")"
 	mkdir -p "$d" && dpkg-deb -e "$1" "$d"
 	for s in preinst postinst prerm postrm; do
 		[[ -f "$d/$s" ]] && sed -e 's/#.*$//' "$d/$s"
@@ -216,9 +217,9 @@ check "policy-rc.d was consulted (and refused, as in the image build)" grep -q '
 check "systemctl used only to check and disable nmbd" \
 	sh -c '! grep " systemctl " '"$LOG"' | grep -Ev "systemctl --quiet (is-enabled|--no-reload disable) nmbd\.service$"'
 check "no docker, virsh, smbcontrol, invoke-rc.d or service call" sh -c '! grep -Eq " (docker|virsh|smbcontrol|invoke-rc\.d|service) " '"$LOG"
-exec_start_pre="$(sed -n 's/^ExecStartPre=//p' /usr/lib/systemd/system/nimbus-control.service)"
+read -ra exec_start_pre <<<"$(sed -n 's/^ExecStartPre=//p' /usr/lib/systemd/system/nimbus-control.service)"   # the command and its arguments
 check "ExecStartPre (nimbus-migrate as nimbus-control) creates schema 1" \
-	sh -c '"$@" && [ "$(cat '"$STATE"'/schema_version)" = 1 ] && [ "$(stat -c %U '"$STATE"'/stacks.json)" = nimbus-control ]' _ "${SVC_RUN[@]}" $exec_start_pre
+	sh -c '"$@" && [ "$(cat '"$STATE"'/schema_version)" = 1 ] && [ "$(stat -c %U '"$STATE"'/stacks.json)" = nimbus-control ]' _ "${SVC_RUN[@]}" "${exec_start_pre[@]}"
 
 # --- user data and administrator changes, as a system in use would have them ---------
 mkdir -p "$STATE/stacks/demo/data" /mnt/user/Media /mnt/disks/disk1 /mnt/parity/parity1 /srv/nimbus/shares/Docs \
@@ -266,7 +267,7 @@ check "nothing stopped before the upgrade" sh -c '! grep -q "^prerm deb-systemd-
 check "user data unchanged" test "$(digest)" = "$data_before"
 check "state files unchanged" test "$(cd "$STATE" && sha256sum schema_version settings.json shares.json stacks.json)" = "$state_before"
 check "ExecStartPre at the same schema changes nothing" \
-	sh -c '"$@" && [ "$(cat '"$STATE"'/schema_version)" = 1 ]' _ "${SVC_RUN[@]}" $exec_start_pre
+	sh -c '"$@" && [ "$(cat '"$STATE"'/schema_version)" = 1 ]' _ "${SVC_RUN[@]}" "${exec_start_pre[@]}"
 : >"$LOG"
 dpkg -i "$deb" >/tmp/reinstall.log 2>&1 || { cat /tmp/reinstall.log; exit 1; }
 check "reinstall with unchanged files: no restart, only start" \
@@ -299,7 +300,7 @@ check "  ... restores the state (schema 2, settings.json unchanged)" \
 check "  ... with one clear message naming the step" \
 	sh -c 'printf "%s\n" "$1" | grep -c "state migration 0003 (break things) failed: .*No space left on device.*restored from.*will not start" | grep -qx 1' _ "$out"
 check "the packaged steps refuse state from a newer version (schema 2)" \
-	sh -c '"$@" 2>/dev/null; [ $? -eq 3 ]' _ "${SVC_RUN[@]}" $exec_start_pre
+	sh -c '"$@" 2>/dev/null; [ $? -eq 3 ]' _ "${SVC_RUN[@]}" "${exec_start_pre[@]}"
 check "stacks/ untouched by all of this" \
 	test "$(cd "$STATE/stacks" && find . -type f -print0 | LC_ALL=C sort -z | xargs -0 sha256sum)" = "$stacks_before"
 

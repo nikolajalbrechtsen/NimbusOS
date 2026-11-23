@@ -213,7 +213,7 @@ class VmService:
         xml = vm_xml.build_domain({
             **spec, "uuid": str(uuid.uuid4()), "pool": "nimbus-images", "volume": volume,
             "vnc_password": "".join(secrets.choice(VNC_ALPHABET) for _ in range(8)),
-            "created": datetime.datetime.now(datetime.timezone.utc).replace(microsecond=0).isoformat(),
+            "created": datetime.datetime.now(datetime.UTC).replace(microsecond=0).isoformat(),
         }, kvm=spec["kvm"])
         try:
             await self._lv("define", xml)

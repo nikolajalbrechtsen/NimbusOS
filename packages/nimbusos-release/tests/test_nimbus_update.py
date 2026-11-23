@@ -75,7 +75,7 @@ Err:1 https://{NIMBUS_HOST}/NimbusOS/apt stable InRelease
   Sub-process /usr/bin/sqv returned an error code (1), error message is: Missing key 0123456789ABCDEF0123456789ABCDEF01234567, which is needed to verify signature.
 W: OpenPGP signature verification failed: https://{NIMBUS_HOST}/NimbusOS/apt stable InRelease: Sub-process /usr/bin/sqv returned an error code (1)
 E: The repository 'https://{NIMBUS_HOST}/NimbusOS/apt stable InRelease' is not signed.
-""")
+""")  # noqa: E501 (apt's own lines, as apt prints them)
     assert [(e["source"], e["kind"]) for e in errors] == [("nimbusos", "signature")]
     assert "nimbusos-archive-keyring" in errors[0]["hint"]
 

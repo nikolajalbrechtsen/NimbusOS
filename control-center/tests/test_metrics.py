@@ -28,6 +28,7 @@ import types
 
 import pytest
 from fastapi.testclient import TestClient
+from starlette.websockets import WebSocketDisconnect
 
 from conftest import CC, FakeDocker, FakeDockerd, FakeLibvirt, FakePrivd, container, docker_stats
 from nimbus_control import docker_stream, metrics_service
@@ -413,7 +414,7 @@ def test_metrics_websocket(w):
                                     headers={"origin": "http://127.0.0.1:7777"}) as ws:
         first, second = ws.receive_json(), ws.receive_json()
     assert first["type"] == "tick" and second["t"] > first["t"] and first["host"]["memory"]["total"] == 16 * GIB
-    with pytest.raises(Exception):
+    with pytest.raises(WebSocketDisconnect):
         with w.client.websocket_connect("ws://127.0.0.1:7777/ws/metrics", subprotocols=["nimbus.v1"],
                                         headers={"origin": "http://127.0.0.1:7777"}) as ws:
             ws.receive_json()

@@ -50,7 +50,8 @@ def env(tmp_path):
 
 def make(env, privd=None):
     settings, fonts = env
-    lister = lambda package: [os.path.join(fonts, n) for n in os.listdir(fonts)] if package == "fonts-inter" else []
+    def lister(package):
+        return [os.path.join(fonts, n) for n in os.listdir(fonts)] if package == "fonts-inter" else []
     app = create_app(settings, privd=privd or FakePrivd(), font_lister=lister)
     return app, TestClient(app, base_url="http://127.0.0.1:7777")
 

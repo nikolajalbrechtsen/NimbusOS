@@ -1,0 +1,206 @@
+# =============================================================================
+# .github/workflows/ci.yml: checks for every push and pull request
+# =============================================================================
+# What: in debian:trixie containers, like tools/dev-shell.sh:
+#         lint      tools/lint.sh: shellcheck, ruff, node --check, JSON,
+#                   git file modes, Docker's committed key; and the action
+#                   pins (tools/pin-actions.sh --check)
+#         unit      pytest (Control Center and nimbus-update) and the tests
+#                   that need no packages: version mapping, Docker archive
+#                   files, the image APT check, APT publishing, ISO splitting
+#         debs      all seven .debs with tools/build-debs.sh and lintian, with
+#                   a throwaway signing key, since packages from CI are never
+#                   published (docs/PLAN.md NOTE-44)
+#         packages  each package and integration test in its own fresh
+#                   container (they install packages and need a clean
+#                   system); NAS, VM and Docker tests privileged
+#         archive   the network checks: every listed package and live-build
+#                   flag exists in Trixie (tools/verify-trixie.sh), and
+#                   Docker still serves the committed key
+# Why:  spec 4.3: shellcheck, ruff, backend unit tests and a build of all
+#       .deb files in debian:trixie on every push and pull request.
+# =============================================================================
+name: ci
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  DEBIAN_FRONTEND: noninteractive
+  # tools/dev-shell.sh installs the same set, so tests run here as they do there.
+  BASE_PACKAGES: git ca-certificates curl gpg gpg-agent gpgv dpkg-dev debhelper devscripts
+  RUFF_VERSION: "0.17.6"
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  lint:
+    name: lint
+    runs-on: ubuntu-24.04
+    container: docker.io/library/debian:trixie
+    timeout-minutes: 15
+    steps:
+      - name: Install the tools
+        run: |
+          apt-get update -q
+          apt-get install -y -q --no-install-recommends $BASE_PACKAGES shellcheck nodejs python3 python3-yaml pipx
+          PIPX_HOME=/opt/pipx PIPX_BIN_DIR=/usr/local/bin pipx install "ruff==$RUFF_VERSION"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Trust the checkout (the container runs as root)
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+      - name: tools/lint.sh
+        run: tools/lint.sh
+      - name: Actions are pinned to their tags' commits
+        run: tools/pin-actions.sh --check
+
+  unit:
+    name: unit tests
+    runs-on: ubuntu-24.04
+    container: docker.io/library/debian:trixie
+    timeout-minutes: 20
+    steps:
+      - name: Install the tools
+        run: |
+          apt-get update -q
+          apt-get install -y -q --no-install-recommends $BASE_PACKAGES apt-utils xz-utils squashfs-tools nodejs \
+            python3-pytest python3-fastapi python3-httpx python3-psutil python3-websockets python3-jinja2 \
+            python3-yaml python3-jsonschema python3-libvirt libvirt-clients python3-apt
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - name: Trust the checkout (the container runs as root)
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+      - name: pytest
+        run: python3 -m pytest -q -p no:cacheprovider control-center/tests packages/nimbusos-release/tests
+      - name: Version mapping (tag to Debian version, suite, channel)
+        run: tools/tests/deb-version.test.sh
+      - name: Docker archive files
+        run: tools/tests/docker-archive.test.sh
+      - name: The image's APT check
+        run: tools/tests/image-apt-check.test.sh
+      - name: APT publishing (pruning, signing, re-signing)
+        run: tools/tests/publish-apt.test.sh
+      - name: ISO splitting
+        run: tools/tests/split-iso.test.sh
+
+  debs:
+    name: build the packages
+    runs-on: ubuntu-24.04
+    container: docker.io/library/debian:trixie
+    timeout-minutes: 40
+    steps:
+      - name: Install the tools
+        run: |
+          apt-get update -q
+          apt-get install -y -q --no-install-recommends $BASE_PACKAGES
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - name: Trust the checkout (the container runs as root)
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+      - name: tools/build-debs.sh with lintian
+        run: tools/build-debs.sh --install-build-deps --lintian --allow-test-key --out _build/debs
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: debs
+          path: _build/debs/*.deb
+          if-no-files-found: error
+          retention-days: 7
+
+  packages:
+    name: ${{ matrix.name }}
+    needs: debs
+    runs-on: ubuntu-24.04
+    container:
+      image: docker.io/library/debian:trixie
+      options: ${{ matrix.privileged && '--privileged' || '--init' }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: "nimbusos-release: install, upgrade, purge"
+            run: packages/nimbusos-release/tests/install.test.sh debs
+          - name: "nimbusos-release: new Recommends reach existing installs"
+            run: packages/nimbusos-release/tests/recommends.test.sh debs
+          - name: "nimbusos-release: os-release and Debian's release tools"
+            run: packages/nimbusos-release/tests/os-identity.test.sh debs
+          - name: "nimbusos-release: pinning and update errors"
+            run: packages/nimbusos-release/tests/apt-integration.test.sh
+          - name: "nimbusos-branding: install and alternatives"
+            run: packages/nimbusos-branding/tests/install.test.sh debs
+          - name: "nimbus-control: maintainer scripts"
+            run: packages/nimbus-control/tests/maintscripts.test.sh debs
+          - name: "nimbus-catalog: build check and upgrades"
+            run: packages/nimbus-catalog/tests/catalog.test.sh
+          - name: "Control Center: the installed package"
+            run: control-center/tests/integration/installed-smoke.sh debs
+          - name: "Control Center: a Samba upgrade keeps the include"
+            run: control-center/tests/integration/samba-ucf-keeps-include.sh
+          - name: "Control Center: catalog images and docker compose config"
+            run: control-center/tests/integration/catalog-images.sh
+          - name: "Control Center: NAS (mergerfs, SnapRAID, Samba)"
+            run: control-center/tests/integration/nas-integration.sh
+            privileged: true
+          - name: "Control Center: VMs (libvirt, QEMU, websockify)"
+            run: control-center/tests/integration/vm-libvirt.sh
+            privileged: true
+          - name: "Control Center: Docker's streaming API"
+            run: control-center/tests/integration/docker-streams.sh
+            privileged: true
+          - name: "Image: live hooks"
+            run: tools/tests/hooks.test.sh debs
+          - name: "Image: boot menus"
+            run: tools/tests/bootloaders.test.sh debs
+          - name: "Image: live initramfs check"
+            run: tools/tests/image-initrd-check.test.sh debs
+          - name: "Image: live-session files"
+            run: tools/tests/live-files.test.sh
+    steps:
+      - name: Install the tools
+        run: |
+          apt-get update -q
+          apt-get install -y -q --no-install-recommends $BASE_PACKAGES
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - name: Trust the checkout (the container runs as root)
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: debs
+          path: debs
+      - name: Run the test
+        env:
+          TEST: ${{ matrix.run }}
+        run: $TEST
+
+  archive:
+    name: Trixie and Docker (network)
+    runs-on: ubuntu-24.04
+    container: docker.io/library/debian:trixie
+    timeout-minutes: 30
+    steps:
+      - name: Install the tools
+        run: |
+          apt-get update -q
+          apt-get install -y -q --no-install-recommends $BASE_PACKAGES
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Trust the checkout (the container runs as root)
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+      - name: Every listed package and live-build flag exists in Trixie
+        run: tools/verify-trixie.sh
+      - name: Docker still serves the committed key
+        run: tools/fetch-docker-key.sh --check

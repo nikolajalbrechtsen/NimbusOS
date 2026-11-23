@@ -140,7 +140,7 @@ def write_block(entries, log=None, path=None):
         return False
     if text:
         os.makedirs(BACKUPS, mode=0o700, exist_ok=True)
-        stamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+        stamp = datetime.datetime.now(datetime.UTC).strftime("%Y%m%dT%H%M%S%fZ")
         shutil.copy2(path, os.path.join(BACKUPS, f"fstab.{stamp}"))
         for old in sorted(os.listdir(BACKUPS))[:-KEEP_BACKUPS]:
             os.unlink(os.path.join(BACKUPS, old))

@@ -40,25 +40,15 @@ usage() {
 	sed -n '/^# Usage:/,/^# =====/p' "$0" | sed -e '$d' -e 's/^# \{0,1\}//'
 }
 
-# Release tags: vMAJOR.MINOR.PATCH with an optional -beta.N, no leading zeros.
-TAG_RE='^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-beta\.(0|[1-9][0-9]*))?$'
-
-# tag_to_debian TAG — print the Debian version for a release tag, or fail.
-tag_to_debian() {
-	[[ "$1" =~ $TAG_RE ]] || return 1
-	local v="${BASH_REMATCH[1]}.${BASH_REMATCH[2]}.${BASH_REMATCH[3]}"
-	if [[ -n "${BASH_REMATCH[5]}" ]]; then
-		v+="~beta.${BASH_REMATCH[5]}"
-	fi
-	printf '%s\n' "$v"
-}
+# Release tags and their Debian versions: NIMBUS_TAG_RE, nimbus_tag_to_debian
+# and nimbus_tag_channel in build/lib/common.sh (shared with publish-apt.sh).
 
 # highest_release_tag GIT-TAG-ARGS... — among the tags git lists, print the
 # release tag with the highest Debian version (empty if none).
 highest_release_tag() {
 	local t v best="" best_v=""
 	while IFS= read -r t; do
-		v="$(tag_to_debian "$t")" || continue
+		v="$(nimbus_tag_to_debian "$t")" || continue
 		if [[ -z "$best" ]] || dpkg --compare-versions "$v" gt "$best_v"; then
 			best="$t"
 			best_v="$v"
@@ -98,7 +88,7 @@ main() {
 	# 1. Which release tag, if any, describes this build?
 	tag=""
 	if [[ -n "$opt_tag" ]]; then
-		tag_to_debian "$opt_tag" >/dev/null \
+		nimbus_tag_to_debian "$opt_tag" >/dev/null \
 			|| die "'$opt_tag' is not a release tag. Use vX.Y.Z or vX.Y.Z-beta.N."
 		if [[ -n "$in_git" ]] && nimbus_git rev-parse -q --verify "refs/tags/$opt_tag" >/dev/null; then
 			[[ "$(nimbus_git rev-parse "refs/tags/$opt_tag^{commit}")" == "$(nimbus_git rev-parse HEAD)" ]] \
@@ -118,19 +108,14 @@ main() {
 
 	# 2. Release build, or development build?
 	if [[ -n "$tag" ]]; then
-		version="$(tag_to_debian "$tag")"
+		version="$(nimbus_tag_to_debian "$tag")"
 		display="${tag#v}"
-		if [[ "$tag" == *-beta.* ]]; then
-			suite="beta"
-			channel="beta"
-		else
-			suite="stable"
-			channel="stable"
-		fi
+		channel="$(nimbus_tag_channel "$tag")"
+		suite="$channel"
 	else
 		base_tag="$(highest_release_tag --merged HEAD)"
 		if [[ -n "$base_tag" ]]; then
-			base="$(tag_to_debian "$base_tag")"
+			base="$(nimbus_tag_to_debian "$base_tag")"
 			count="$(nimbus_git rev-list --count "${base_tag}..HEAD")"
 		else
 			base="0.0.0"

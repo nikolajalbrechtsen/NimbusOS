@@ -1,0 +1,15 @@
+# =============================================================================
+# .shellcheckrc: shellcheck settings for every shell script in the repository
+# =============================================================================
+# What: follow `source`/`.` into other repository files (build/lib/common.sh,
+#       nimbus.conf), resolved relative to the script's own folder, and turn
+#       off one check, SC2016 ("expressions don't expand in single quotes").
+# Why:  the tests deliberately pass code to `sh -c '…' _ "$arg"` and
+#       `python3 -c '…' "$arg"`, where the single quotes are what keep the
+#       outer shell from expanding $1, $@ or $(…). SC2016 flags every one of
+#       those (91 places) and has found nothing else. Everything else
+#       shellcheck reports fails tools/lint.sh and ci.yml.
+# =============================================================================
+external-sources=true
+source-path=SCRIPTDIR
+disable=SC2016

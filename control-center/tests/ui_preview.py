@@ -135,7 +135,8 @@ def build_state(tmp, catalog_dir):
     (state / "shares.json").write_text(json.dumps({"shares": [{"name": "Media", "path": str(media)},
                                                               {"name": "Backups", "path": str(tmp / "mnt" / "user" / "Backups")}]}))
     catalog = Catalog(str(catalog_dir))
-    port = lambda pid, container_port, host, proto="tcp", ip="": {"id": pid, "container": container_port, "host": host, "protocol": proto, "ip": ip}
+    def port(pid, container_port, host, proto="tcp", ip=""):
+        return {"id": pid, "container": container_port, "host": host, "protocol": proto, "ip": ip}
     apps = {
         "demo-web": ("demo-web", 1, [port("http", 80, 8080)],
                      [{"id": "config", "container": "/config", "source": str(stacks / "demo-web" / "config"), "read_only": False},
@@ -312,7 +313,8 @@ class PreviewNas(FakeNas):
             {**nas_disk("sdc", "parity", "parity1", fstype="xfs", size=8 * 1000 ** 4), "model": "WDC WD80EFZZ", "serial": "WD-CA9Z8Y7X",
              "mounts": ["/mnt/parity/parity1"], "smart": {"passed": True, "temperature": 35, "asleep": True}},
             {**nas_disk("sdd", fstype="ntfs", size=8 * 1000 ** 4), "model": "WDC WD80EFZZ", "serial": "WD-CA5E6F7G",
-             "partitions": [{"path": "/dev/sdd1", "size": 8 * 1000 ** 4, "fstype": "ntfs", "label": "Backup", "uuid": "u", "mountpoints": []}],
+             "partitions": [{"path": "/dev/sdd1", "size": 8 * 1000 ** 4, "fstype": "ntfs", "label": "Backup", "uuid": "u",
+                             "mountpoints": []}],
              "smart": smart(33)},
             {**nas_disk("sde", size=12 * 1000 ** 4), "model": "ST12000VN0008", "serial": "ZL2X9Y8W", "smart": smart(34)},
         ]
@@ -425,7 +427,7 @@ def preview(out, pages):
     host.fill(app.app.state.metrics.history)
     asyncio.run(app.app.state.metrics.refresh_storage())          # what the hourly refresh keeps
     usage = app.app.state.shares.usage
-    for s, used in zip(specs, (2.9e12, 41e9, 380e9, 212e9, 1.2e9)):
+    for s, used in zip(specs, (2.9e12, 41e9, 380e9, 212e9, 1.2e9), strict=True):
         usage.cache[S.share_path(s)] = (time.monotonic(), int(used), True)
     server = serve(app)
     codes = app.app.state.codes

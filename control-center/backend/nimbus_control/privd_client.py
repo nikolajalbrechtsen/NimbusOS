@@ -50,7 +50,7 @@ class PrivdClient:
             while True:
                 try:
                     line = await asyncio.wait_for(reader.readuntil(b"\n"), timeout=limit)
-                except asyncio.TimeoutError:
+                except TimeoutError:
                     raise PrivdError("failed", f"{verb} did not finish within {int(limit)} seconds.") from None
                 except (asyncio.IncompleteReadError, ConnectionError):
                     raise PrivdError("failed", f"The privileged helper closed the connection during {verb}.") from None

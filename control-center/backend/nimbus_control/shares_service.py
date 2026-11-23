@@ -76,7 +76,7 @@ class Usage:
             out, _ = await asyncio.wait_for(proc.communicate(), timeout=300)
             used = int(out.split()[0]) if out.split() else 0
             self.cache[path] = (time.monotonic(), used, proc.returncode == 0)
-        except (OSError, ValueError, asyncio.TimeoutError):
+        except (TimeoutError, OSError, ValueError):
             pass
         finally:
             self.running.discard(path)

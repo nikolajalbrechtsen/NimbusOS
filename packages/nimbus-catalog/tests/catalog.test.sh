@@ -78,7 +78,7 @@ EOF
 	app "$1" grafana "$2" "$3"
 }
 variant() {   # variant NAME: a fresh copy of the good catalog to break
-	rm -rf "$WORK/$1"
+	rm -rf "${WORK:?}/$1"
 	cp -a "$WORK/good" "$WORK/$1"
 	printf '%s' "$WORK/$1"
 }

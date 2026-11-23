@@ -50,6 +50,26 @@ NIMBUS_PACKAGES=(
 NIMBUS_DOCKER_LIST_CHROOT_MARKER="nimbus:docker.list.chroot"
 NIMBUS_DOCKER_LIST_BINARY_MARKER="nimbus:docker.list.binary"
 
+# Release tags: vMAJOR.MINOR.PATCH with an optional -beta.N, no leading zeros
+# (docs/PLAN.md NOTE-32). tools/deb-version.sh and tools/publish-apt.sh use these.
+NIMBUS_TAG_RE='^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-beta\.(0|[1-9][0-9]*))?$'
+
+# nimbus_tag_to_debian TAG — the Debian version of a release tag (v0.2.1-beta.3
+# -> 0.2.1~beta.3, so a final release sorts above its betas), or fail.
+nimbus_tag_to_debian() {
+	[[ "$1" =~ $NIMBUS_TAG_RE ]] || return 1
+	local v="${BASH_REMATCH[1]}.${BASH_REMATCH[2]}.${BASH_REMATCH[3]}"
+	if [[ -n "${BASH_REMATCH[5]}" ]]; then
+		v+="~beta.${BASH_REMATCH[5]}"
+	fi
+	printf '%s\n' "$v"
+}
+
+# nimbus_tag_channel TAG — beta for -beta.N tags, else stable (also the APT suite).
+nimbus_tag_channel() {
+	if [[ "$1" == *-beta.* ]]; then printf 'beta\n'; else printf 'stable\n'; fi
+}
+
 # -----------------------------------------------------------------------------
 # Logging and error handling
 # -----------------------------------------------------------------------------

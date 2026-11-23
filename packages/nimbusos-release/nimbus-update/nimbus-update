@@ -140,7 +140,7 @@ class UsageError(Exception):
 # =============================================================================
 
 def now_utc():
-    return datetime.datetime.now(datetime.timezone.utc).replace(microsecond=0)
+    return datetime.datetime.now(datetime.UTC).replace(microsecond=0)
 
 
 def iso(ts):

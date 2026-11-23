@@ -1,0 +1,134 @@
+# =============================================================================
+# .github/workflows/refresh.yml: keep the APT repository valid (weekly)
+# =============================================================================
+# What: every Monday, and on demand (Actions, refresh, Run workflow):
+#         resign      re-signs the Release files of every suite on gh-pages
+#                     with a new Date and Valid-Until 14 days out
+#                     (tools/publish-apt.sh resign). Packages, the pool and
+#                     the indexes are not touched. If gh-pages doesn't exist
+#                     yet, it creates the empty signed repository that the
+#                     first ISO build needs (docs/PLAN.md NOTE-04).
+#         docker-key  checks that Docker still serves the committed key
+#                     (tools/fetch-docker-key.sh --check). If not, the job
+#                     fails and opens an issue; it never changes the key.
+# Why:  spec 4.2 (Valid-Until 14 days, weekly re-signing) and the review's
+#       Docker key rotation rule. GitHub pauses scheduled workflows after 60
+#       days without activity in the repository; docs/RELEASING.md says how
+#       to notice and re-enable it (NOTE-40).
+# =============================================================================
+name: refresh
+
+on:
+  schedule:
+    - cron: "17 4 * * 1"
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: nimbusos-publish
+  cancel-in-progress: false
+
+env:
+  DEBIAN_FRONTEND: noninteractive
+  BASE_PACKAGES: git ca-certificates curl gpg gpg-agent gpgv dpkg-dev
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  resign:
+    name: re-sign the APT repository
+    runs-on: ubuntu-24.04
+    container: docker.io/library/debian:trixie
+    permissions:
+      contents: write
+    timeout-minutes: 15
+    steps:
+      - name: Install the tools
+        run: |
+          apt-get update -q
+          apt-get install -y -q --no-install-recommends $BASE_PACKAGES apt-utils xz-utils python3
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Trust the checkout (the container runs as root)
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+      - name: Get the published tree (gh-pages)
+        id: site
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          url="https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          if git ls-remote --exit-code --heads "$url" gh-pages >/dev/null; then
+            git clone --quiet --depth 1 --branch gh-pages "$url" "$RUNNER_TEMP/site"
+            rm -rf "$RUNNER_TEMP/site/.git"
+            echo "exists=yes" >>"$GITHUB_OUTPUT"
+          else
+            mkdir -p "$RUNNER_TEMP/site"
+            echo "exists=no" >>"$GITHUB_OUTPUT"
+          fi
+      - name: Re-sign (or create the empty repository)
+        env:
+          APT_SIGNING_KEY: ${{ secrets.APT_SIGNING_KEY }}
+          APT_SIGNING_PASSPHRASE: ${{ secrets.APT_SIGNING_PASSPHRASE }}
+          EXISTS: ${{ steps.site.outputs.exists }}
+        run: |
+          export GNUPGHOME="$RUNNER_TEMP/gnupg"
+          key="$(tools/import-signing-key.sh)"
+          if [[ "$EXISTS" == yes ]]; then
+            tools/publish-apt.sh resign --site "$RUNNER_TEMP/site" --key "$key"
+            message="Re-sign the repository"
+          else
+            tools/publish-apt.sh init --site "$RUNNER_TEMP/site" --key "$key"
+            message="Create the empty repository"
+          fi
+          tools/publish-apt.sh check --site "$RUNNER_TEMP/site"
+          echo "MESSAGE=$message" >>"$GITHUB_ENV"
+      - name: Push gh-pages as one fresh commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cd "$RUNNER_TEMP/site"
+          git init --quiet --initial-branch gh-pages
+          git add --all
+          git -c user.name="github-actions[bot]" -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+            commit --quiet -m "$MESSAGE"
+          git push --quiet --force "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" gh-pages
+
+  docker-key:
+    name: Docker's signing key is unchanged
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      issues: write
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: tools/fetch-docker-key.sh --check
+        id: check
+        run: tools/fetch-docker-key.sh --check 2>&1 | tee "$RUNNER_TEMP/check.log"
+      - name: Open an issue (never update the key here)
+        if: failure() && steps.check.outcome == 'failure'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          title="Docker's APT signing key changed"
+          if [[ -n "$(gh issue list --state open --search "\"$title\" in:title" --json number --jq '.[].number')" ]]; then
+            echo "An issue is already open."
+            exit 0
+          fi
+          {
+            echo "The weekly check found that Docker no longer serves the key committed in"
+            echo "\`build/config/archives/docker.key.chroot\` (fingerprint 9DC8 5822 9FC7 DD38 854A E2D8 8D81 803C 0EBF CD88)."
+            echo
+            echo "Builds and installed systems keep using the committed key until a person checks Docker's"
+            echo "announcement and updates it with \`tools/fetch-docker-key.sh --write\` after changing"
+            echo "\`NIMBUS_DOCKER_KEY_FPR\` in \`build/nimbus.conf\` (docs/RELEASING.md)."
+            echo
+            echo "Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+            echo
+            echo '```'
+            tail -n 30 "$RUNNER_TEMP/check.log"
+            echo '```'
+          } >"$RUNNER_TEMP/issue.md"
+          gh issue create --title "$title" --body-file "$RUNNER_TEMP/issue.md"

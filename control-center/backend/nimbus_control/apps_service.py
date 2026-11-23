@@ -92,7 +92,7 @@ def share_gid():
 
 
 def _now():
-    return datetime.datetime.now(datetime.timezone.utc).replace(microsecond=0).isoformat()
+    return datetime.datetime.now(datetime.UTC).replace(microsecond=0).isoformat()
 
 
 def generate_secret(kind):

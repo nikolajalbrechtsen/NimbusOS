@@ -1,3 +1,4 @@
+# shellcheck shell=sh
 # /etc/xdg/plasma-workspace/env/10-nimbusos-xdg.sh (nimbusos-branding)
 #
 # Sourced by the Plasma session at login. It puts /etc/xdg/nimbusos first in

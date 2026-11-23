@@ -17,17 +17,17 @@ This is deliverable 1 of 11. It covers the repository layout, how the parts conn
 NimbusOS/
 ├── README.md                         What NimbusOS is, download + verify the ISO, how updates work (NOTE-46)
 ├── LICENSE                           GPL-3.0-or-later full text (code and packaging)
-├── LICENSES/                         GPL-3.0-or-later.txt, CC-BY-SA-4.0.txt (artwork), fetched verbatim (deliverable 10)
+├── LICENSES/CC-BY-SA-4.0.txt         the artwork's license, SPDX's text at the commit debian/copyright pins (NOTE-71)
 ├── .gitattributes                    LF line endings everywhere (NOTE-50)
 ├── .gitignore                        build products, caches, anything that looks like a private key
-├── .shellcheckrc                     repo-wide shellcheck settings
-├── ruff.toml                         ruff settings for all Python in the repo
+├── .shellcheckrc                     repo-wide shellcheck settings (SC2016 off: deliberate `sh -c '…'`)
+├── ruff.toml                         ruff's rule set (E, W, F, B, UP; Python 3.13), also for the programs without .py
 │
 ├── .github/dependabot.yml            keeps the SHA-pinned GitHub Actions current (NOTE-42)
 ├── .github/workflows/
-│   ├── ci.yml                        push + PR: shellcheck, ruff, pytest, verify-trixie, Samba/ucf test, build all .debs
+│   ├── ci.yml                        push + PR: lint, unit tests, all .debs with lintian, every package and integration test, Trixie/Docker checks
 │   ├── release.yml                   tags vX.Y.Z / vX.Y.Z-beta.N: debs → APT → ISO → GitHub Release
-│   └── refresh.yml                   weekly: re-sign Release files; bootstraps an empty repo once (NOTE-04)
+│   └── refresh.yml                   weekly: re-sign Release files, bootstrap an empty repo once (NOTE-04); Docker key check
 │
 ├── build/
 │   ├── nimbus.conf                   every build tunable, one place (names, URLs, mirrors, live user, split size…)
@@ -124,8 +124,6 @@ NimbusOS/
 │        portainer, uptime-kuma, vaultwarden, nextcloud-aio, jellyfin,
 │        pihole, syncthing, home-assistant, grafana, nginx-proxy-manager (NOTE-70)
 │
-├── apt/                              repository config for gh-pages: stable + beta, last 3 versions, Valid-Until 14 d (NOTE-52)
-│
 ├── tools/
 │   ├── build-debs.sh                 stage + build all 7 .debs (used by build.sh, ci.yml, release.yml)
 │   ├── deb-version.sh                git tag → Debian version (NOTE-32)
@@ -135,15 +133,19 @@ NimbusOS/
 │   ├── check-file-modes.sh           git file modes must match tools/file-modes.conf (CI)
 │   ├── file-modes.conf               which files must be executable, by role
 │   ├── fetch-docker-key.sh           re-downloads Docker's key and refuses it unless the fingerprint matches
+│   ├── lint.sh                       shellcheck, ruff, node --check, JSON/YAML, file modes, Docker key (ci.yml's lint job)
+│   ├── import-signing-key.sh         loads the APT_SIGNING_KEY secret in a job; refuses a key that isn't committed
 │   ├── pin-actions.sh                resolves each action's release tag to its commit SHA (NOTE-42)
-│   ├── publish-apt.sh                add packages, prune to 3 versions, index, releases.json, sign (release + refresh)
-│   ├── releases-json.py              maintains apt/releases.json
+│   ├── publish-apt.sh                apt-ftparchive repository on gh-pages: init, add (prune to 3), resign, check (NOTE-52)
+│   ├── releases-json.py              maintains releases.json next to the repository (NOTE-37)
 │   ├── split-iso.sh                  splits ISOs over the GitHub asset limit; writes join instructions
 │   ├── qemu-test.sh                  the UEFI/BIOS QEMU test commands from docs/TESTING.md
 │   └── tests/
 │       ├── deb-version.test.sh       version mapping (real dpkg; 40 checks)
 │       ├── image-apt-check.test.sh   final-image APT check: good image + 6 failure modes
 │       ├── docker-archive.test.sh    fetch-docker-key.sh --verify-local: real files + 8 breakages
+│       ├── publish-apt.test.sh       pruning (dpkg order, ~beta), signing, re-signing, by-hash, with a real apt client
+│       ├── split-iso.test.sh         ISO parts, SHA256SUMS, join instructions
 │       ├── hooks.test.sh             the live-build hooks in a container standing in for the chroot
 │       ├── live-files.test.sh        the installer configuration and live-only scripts (sources, cleanup)
 │       ├── bootloaders.test.sh       the live boot menus, made by live-build's own scripts
@@ -421,9 +423,9 @@ Because live-build only places keys at that fixed `trusted.gpg.d/<name>.asc` pat
 
 ### CI and repository
 
-**NOTE-42 — Actions are pinned to commit SHAs.** Workflows use only GitHub's own actions (`actions/checkout`, `actions/upload-artifact`, `actions/download-artifact`). Each is pinned to the full commit SHA of a released tag, with the tag in a trailing comment (`# v4.2.2`). Releases are created with the preinstalled `gh` CLI, and no marketplace actions are used. The SHAs are resolved over the network in deliverable 10 by `tools/pin-actions.sh`, which you can re-run later. `.github/dependabot.yml` (ecosystem `github-actions`) opens PRs that move the pins and their comments forward.
+**NOTE-42 — Actions are pinned to commit SHAs.** Workflows use only GitHub's own actions (`actions/checkout`, `actions/upload-artifact`, `actions/download-artifact`). Each is pinned to the full commit SHA of a released tag, with the tag in a trailing comment (deliverable 10 pinned their latest releases: `# v7.0.1`, `# v7.0.2` and `# v8.0.2`), and `ci.yml` re-checks the pins with `tools/pin-actions.sh --check`. Releases are created with the preinstalled `gh` CLI, and no marketplace actions are used. The SHAs are resolved over the network in deliverable 10 by `tools/pin-actions.sh`, which you can re-run later. `.github/dependabot.yml` (ecosystem `github-actions`) opens PRs that move the pins and their comments forward.
 
-**NOTE-43 — ruff is a CI tool only.** ruff is installed on the GitHub runner with `pipx install ruff==<pinned>`; pipx comes preinstalled on GitHub's Ubuntu runners. It is not part of the image or of any package, and `tools/verify-trixie.sh` doesn't check for it.
+**NOTE-43 — ruff is a CI tool only.** ruff is installed in `ci.yml`'s lint job, a `debian:trixie` container, with Debian's pipx at a pinned version (`RUFF_VERSION`, 0.17.6), and with the same pin locally (`tools/lint.sh`). It is not part of the image or of any package, and `tools/verify-trixie.sh` doesn't check for it.
 
 **NOTE-44 — Bootstrapping the signing key.** The repository can only hold the public key after you have generated it (`docs/SIGNING.md`). Until `packages/nimbusos-archive-keyring/keys/` contains a key, `ci.yml` builds the packages with a throwaway key generated inside the job and prints a warning. `release.yml` refuses to run without a committed public key and checks that its fingerprint matches the `APT_SIGNING_KEY` secret.
 
@@ -843,6 +845,40 @@ Until batch 5, the router shows a clear "could not be shown" state for a page wh
   - Uptime Kuma gets no Docker socket: its README doesn't use one.
 - **What couldn't run here.** No container can start in the dev container (NOTE-69), so installs are tested against the fake `docker` program, and `docker compose config` runs for real. Deliverable 11's QEMU test installs Jellyfin on the `media` share (the spec's step 3).
 
+### Found while writing the workflows and docs (deliverable 10)
+
+**NOTE-71 — Workflows, publishing, and the documentation.** Three workflows, Dependabot, the publishing tools, `README.md`, `docs/RELEASING.md`, `docs/SIGNING.md` and the first release notes.
+- **The workflows.** Every job that needs Debian runs in a `debian:trixie` container with `tools/dev-shell.sh`'s base packages, so tests behave as they do locally. Containers run as root, so each job marks the checkout as a git `safe.directory`.
+  - `ci.yml` has five jobs: lint (`tools/lint.sh` and the action pins), unit tests, the seven packages with lintian (throwaway key, NOTE-44), a matrix of 17 package and integration tests, and the network checks (`verify-trixie.sh`, Docker's key). Each matrix entry gets its own fresh container, because the tests install packages; the NAS, VM and Docker tests run privileged.
+  - `release.yml` runs check, debs, publish, iso, release. `refresh.yml` runs resign (or init) and docker-key. Both share the concurrency group `nimbusos-publish` and never cancel a run. Each job asks for its own permissions: `contents: write` only to publish, `issues: write` only for the Docker key issue. Tags and outputs reach scripts through environment variables, never pasted into them.
+  - The ISO job builds in `docker run --privileged` on the runner itself, after removing preinstalled toolchains, with the live-build tree on `/mnt` (live-build needs 40 GiB). It first waits until GitHub Pages serves the new `releases.json`: `build/build.sh` checks the repository (NOTE-04), and Pages deploys after the push.
+  - `SHA256SUMS` is signed in the last job, so the long ISO build never sees the secret key.
+- **The APT repository** (`tools/publish-apt.sh`; refines NOTE-52).
+  - **Layout:** one pool per suite, `pool/<suite>/<package>/`, so pruning a suite needs no bookkeeping. Indexes are in `dists/<suite>/main/binary-amd64/`: every package is `Architecture: all`, and clients ask for amd64. Release files carry Origin and Label `NimbusOS`, Suite and Codename set to the suite's name, Architectures `amd64` and Components `main`. Every setting is an `apt-ftparchive -o` option, so the planned `apt/conf/` folder isn't needed.
+  - **Found by testing apt-ftparchive 3.0.4:** it ignores a `Valid-Until` value given as an option. Only `APT::FTPArchive::Release::ValidTime` (seconds) writes the field, counted from the signing time. Re-signing writes `Date` and `Valid-Until` itself.
+  - `APT::FTPArchive::DoByHash` writes the by-hash copies and `Acquire-By-Hash: yes`. Publishing keeps the index files the new and the previous Release name, and removes older ones.
+  - A version already published with different contents is refused. Publishing identical files again changes nothing, so a failed release can be re-run.
+  - The tag rules moved from `tools/deb-version.sh` into `build/lib/common.sh` (`nimbus_tag_to_debian`, `nimbus_tag_channel`), so publishing uses the same mapping without deb-version's working-tree checks.
+  - Next to the repository: `releases.json` with a binary detached signature, `nimbusos-archive-keyring.asc` (for checking ISOs), and `.nojekyll`.
+- **Signing in jobs:** `tools/import-signing-key.sh` loads the secret, then checks it holds one key, that the passphrase works (a test signature), and that the fingerprint is a committed key. It fails before anything is published.
+- **The ISO assets:** `tools/split-iso.sh` writes the assets and the download instructions. The PowerShell join and check it prints was run on this Windows machine (Windows PowerShell 5.1): the parts joined back into the identical ISO.
+- **Found by the Samba test:** a non-interactive Samba upgrade keeps the include line even without `UCF_FORCE_CONFFOLD`. Only an administrator choosing Samba's new file (`UCF_FORCE_CONFFNEW`) drops it, and nimbus-control's postinst block restores it exactly once. The test changes Samba's template, as a new release would, then runs Samba's own postinst through `dpkg-reconfigure`. Calling the postinst directly fails in `dpkg-maintscript-helper`, which needs dpkg's environment.
+- **Lint:** `tools/lint.sh` runs shellcheck, ruff, `node --check`, the JSON and YAML parse, file modes and the Docker key check.
+  - ruff 0.17.6 with the rule set in `ruff.toml` found 31 problems. 17 were fixed automatically (`datetime.UTC`, `TimeoutError`, `collections.abc`). By hand: `zip(..., strict=True)` where lengths must match, `raise ... from None`, the exact exception types in two tests instead of `Exception`, `def` instead of assigned lambdas, and lines over 140 characters.
+  - shellcheck 0.10.0: SC2016 is off for the whole repository (`.shellcheckrc` gives the reason). Fixed:
+    - an unquoted ExecStartPre command, now an array;
+    - `A && pass || fail` chains, now if/else;
+    - `local d="$(...)"`;
+    - `rm -rf "$WORK/$1"`, now `${WORK:?}`.
+  - Two sourced fragments got `shell` directives. shellcheck tracks variable names across sourced files, so the new tools avoid the array names `common.sh` uses.
+- **Actions:** the latest releases at deliverable 10 were checkout v7.0.1, upload-artifact v7.0.2 and download-artifact v8.0.2. actionlint wasn't used: it isn't in Debian, and running its release binary was declined. Instead, the workflows were checked against themselves: every `needs`, every output and step id, matrix keys and permissions, and they parse as YAML (`tools/lint.sh`).
+- **Licenses:** `LICENSE` is Debian's `/usr/share/common-licenses/GPL-3` (SHA-256 `3972dc97…`). `LICENSES/CC-BY-SA-4.0.txt` is SPDX's text at the commit `nimbusos-branding`'s `debian/copyright` pins (SHA-256 `cde7883b…`). The planned `LICENSES/GPL-3.0-or-later.txt` would only repeat `LICENSE`.
+- **Documentation:**
+  - `README.md` is for people visiting the project: download, verify, install, updates, security (NOTE-22, NOTE-45), building.
+  - `docs/RELEASING.md` and `docs/SIGNING.md` are for the maintainer. The key's user ID has no e-mail address. It expires after 3 years, with the steps to extend it, rotate it, or act on a leak in an order installed systems can follow.
+  - `docs/release-notes/v0.1.0.md` holds the first release's notes.
+- **What couldn't be tested here:** the workflows on GitHub itself (runners, secrets, Pages). Every script they call is tested above. `ci.yml` first runs when this deliverable is pushed. `release.yml` and `refresh.yml` need the one-time setup in `docs/RELEASING.md` (the key and the secrets); until then, refresh's weekly re-signing fails with the message that the secret is missing.
+
 ### Found by the Trixie archive check (deliverable 3)
 
 **NOTE-51 — `wsdd2` instead of `wsdd`.** Trixie has no `wsdd` package (§7). `wsdd2` (1.8.7, main) serves the same purpose: it makes the machine show up under Network in Windows Explorer through WS-Discovery. The storage list, the `nimbus-control` Depends, the services table, the alert rules and the Settings page all use `wsdd2` and its unit, `wsdd2.service`.
@@ -1177,6 +1213,31 @@ How to read it: the NimbusOS and Docker repositories offer `bash` 99.0 and 98.0,
 - **Packages:** `nimbus-catalog` builds from `catalog/` ("10 app(s) OK") and is lintian-clean, as is `nimbus-control`. The maintainer-script test passes 82 of 82.
 - **Screenshots looked at:** the Catalog tab with the ten apps (monograms on their category colors), and Advanced install for Pi-hole: its DNS ports on the LAN address, the fixed-port warning when port 53 is taken, and its notes.
 
+**Deliverable 10** (workflows and docs, 2026-11-23, `dev-shell.sh`, NOTE-71). `ci.yml`'s lint and unit jobs, run as the workflow runs them, in one fresh container:
+- **`tools/lint.sh`:** shellcheck 0.10.0 on 57 scripts, ruff 0.17.6, `node --check` on 13 files, 16 JSON and 4 YAML files, file modes, Docker's key: all clean.
+- **pytest, 548 passed** (the Control Center and nimbus-update's tests together); 21 skipped as before.
+- **`publish-apt.test.sh`, 38 passed** (new):
+  - init;
+  - pruning out of order and the `~beta` order (`0.2.0~beta.1 < 0.2.0`, `~beta.10 > ~beta.3`), with an old file date that must not matter;
+  - `apt-get update`, `madison` and a rollback download with a real apt client;
+  - by-hash;
+  - republishing and its three refusals;
+  - re-signing with byte-identical indexes;
+  - `releases.json` and its signature;
+  - `check` catching a changed index.
+- **`split-iso.test.sh`, 17 passed** (new). The PowerShell join and check it generates also ran on Windows PowerShell 5.1 on the development machine.
+- **`deb-version.test.sh` 40, `docker-archive.test.sh` 9, `image-apt-check.test.sh` 7 passed** after the tag rules moved into `common.sh`.
+- **`samba-ucf-keeps-include.sh`, 12 passed** (new; Samba 4.22.11, ucf 3.0052).
+- **Changed scripts re-run in fresh containers:**
+  - all seven packages build lintian-clean;
+  - `installed-smoke.sh` 49;
+  - `maintscripts.test.sh` 82;
+  - branding `install.test.sh` 92;
+  - `apt-integration.test.sh` 6;
+  - `catalog.test.sh` 32;
+  - `vm-libvirt.sh` 7 (real libvirt).
+- **The workflows:** checked against themselves (every `needs`, output, step id, matrix key and permission), and every action is pinned to its tag's commit (`tools/pin-actions.sh --check`). Their first run on GitHub is the push of this deliverable.
+
 **os-release, unattended-upgrades, Docker and Calamares** (`os-identity.test.sh`, NimbusOS os-release installed). Excerpts:
 
 ```
@@ -1233,7 +1294,7 @@ Facts confirmed by reading live-build `1:20250505+deb13u1`'s own scripts and Deb
 | 7 | Live-only files and boot menus (done) | `build/config/includes.chroot_after_packages/**`, `build/config/bootloaders/**`, hook `0400-live-manifest`, the verify hook's installer checks, `--bootappend-live-failsafe` and `nimbus_prepare_grub_theme` in `build/lib/common.sh`, `tools/tests/{live-files,bootloaders}.test.sh` (NOTE-63, NOTE-64) |
 | 8 | Nimbus Control Center, in five batches (done, NOTE-65) | **Batch 1 (done):** backend core (app, auth, errors, config, fonts, privd client, system, updates), `nimbus_common` (validate, protocol), privd (server, registry, runner, audit, updates, system), launcher and Grant access, desktop file and polkit action, the whole design system (`style.css`, `lib/{api,ui,icons}.js`, `app.js`), `views/updates.js`, tests. **Batch 2 (done, NOTE-66):** `backend/nimbus_control/{manifest,catalog,compose,apps_service,jobs,docker_api,state}.py`, privd `stacks.py`, the validators for apps, form components in `lib/ui.js`, `views/apps.js`, the fixture catalog and `test_{manifest,compose,apps}.py`, privd stack tests, Apps checks in `installed-smoke.sh`, Apps scenes in `ui_preview.py`. **Batch 3 (done, NOTE-67):** `backend/nimbus_control/{libvirt_api,vm_xml,vm_service,iso_library}.py`, the VM validators and settings, `views/vms.js`, `lib/vnc.js`, `console.{html,js}`, the CSP for websockify, `test_{vm_xml,isos,vms,vm_libvirt}.py`, `tests/integration/vm-libvirt.sh`, VM checks in `installed-smoke.sh`, VM scenes and `--live-vm` in `ui_preview.py`. **Batch 4 (done, NOTE-68):** privd `storage.py`, `samba.py`, `fsutil.py`, `nimbus_common/shares.py`, `backend/nimbus_control/{storage_service,shares_service}.py`, settings in `state.py`, `views/{storage,settings}.js`, `bin/{nimbus-netfix,nimbus-snapraid-run,nimbus-recycle-clean}`, the Samba drop-in's new sections, `test_{storage_privd,samba_privd,nas_api,nas_scripts}.py`, `tests/integration/nas-integration.sh`, NAS checks in `installed-smoke.sh`, storage scenes in `ui_preview.py`. **Batch 5 (done, NOTE-69):** `backend/nimbus_control/{metrics_service,docker_stream,alerts}.py`, `apps_service.diagnose`, libvirt's statistics call and state mapping, unprotected bytes in privd `storage.py`, `views/dashboard.js`, `lib/charts.js`, the console dialog in `lib/vnc.js`, navigation intents in `app.js`, `test_{metrics,alerts}.py`, `tests/integration/docker-streams.sh`, Dashboard checks in `installed-smoke.sh`, `vm-libvirt.sh` and `nas-integration.sh`, Dashboard scenes in `ui_preview.py`. Each batch adds its lines to `packages/nimbus-control/debian/install` (NOTE-61) |
 | 9 | Catalog (done, NOTE-70) | `catalog/SCHEMA.md`, `catalog/manifest.schema.json` (with `template_version`, NOTE-60), the 10 apps; `webui.scheme`, `single_instance` and `companions` in `manifest.py`, `apps_service.py`, `docker_api.py`, `metrics_service.py` and the Catalog card; `timezone` and `share_gid` for templates; `check-catalog.py` refuses extra files; `test_catalog.py`, `tests/integration/catalog-images.sh`, catalog checks in `installed-smoke.sh` and `catalog.test.sh`, the real catalog in `ui_preview.py` |
-| 10 | CI/CD and docs (CI also runs `tools/tests/*.test.sh` and `tools/fetch-docker-key.sh --verify-local` / `--check`) | `.github/workflows/*`, `.github/dependabot.yml`, `apt/conf/*`, `tools/{publish-apt.sh,releases-json.py,split-iso.sh,pin-actions.sh}`, `control-center/tests/integration/samba-ucf-keeps-include.sh`, `README.md`, `LICENSE`, `LICENSES/*`, `.shellcheckrc`, `ruff.toml`, `docs/{RELEASING,SIGNING}.md`, `docs/release-notes/v0.1.0.md` |
+| 10 | CI/CD and docs (done, NOTE-71) | `.github/workflows/{ci,release,refresh}.yml`, `.github/dependabot.yml`, `tools/{publish-apt.sh,releases-json.py,split-iso.sh,pin-actions.sh,import-signing-key.sh,lint.sh}`, `tools/tests/{publish-apt,split-iso}.test.sh`, the tag rules in `build/lib/common.sh`, `control-center/tests/integration/samba-ucf-keeps-include.sh`, `README.md`, `LICENSE`, `LICENSES/CC-BY-SA-4.0.txt`, `.shellcheckrc`, `ruff.toml` (and the lint fixes it found), `docs/{RELEASING,SIGNING}.md`, `docs/release-notes/v0.1.0.md` |
 | 11 | Testing (the smoke test includes `systemctl --user show-environment \| grep XDG_CONFIG_DIRS` and kinfocenter's About page after a graphical login, NOTE-55; the Dashboard's Docker and VM numbers against `docker stats` and `virsh domstats`, and SnapRAID move lines on real disks, NOTE-69) | `docs/TESTING.md`, `tools/qemu-test.sh` |
 
 ---

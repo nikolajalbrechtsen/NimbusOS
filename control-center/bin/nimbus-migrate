@@ -140,7 +140,7 @@ def read_schema(state_dir):
         if state_files(state_dir):
             raise MigrationError(
                 f"{state_dir} holds state files but no {SCHEMA_FILE}; refusing to guess their "
-                f"version. Restore {SCHEMA_FILE} from a backup in {state_dir}/{BACKUP_DIR}/.", 3)
+                f"version. Restore {SCHEMA_FILE} from a backup in {state_dir}/{BACKUP_DIR}/.", 3) from None
         return 0
     if not re.fullmatch(r"[0-9]{1,6}", text):
         raise MigrationError(f"{path} does not hold a version number: {text!r}", 3)
@@ -172,7 +172,7 @@ def find_steps(migrations_dir):
     try:
         names = os.listdir(migrations_dir)
     except OSError as e:
-        raise MigrationError(f"cannot read {migrations_dir}: {e.strerror}", 2)
+        raise MigrationError(f"cannot read {migrations_dir}: {e.strerror}", 2) from None
     steps = []
     for name in sorted(names):
         m = STEP_RE.match(name)
@@ -229,7 +229,7 @@ class Context:
 def make_backup(state_dir, from_version):
     root = os.path.join(state_dir, BACKUP_DIR)
     os.makedirs(root, mode=0o750, exist_ok=True)
-    stamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%S.%fZ")
+    stamp = datetime.datetime.now(datetime.UTC).strftime("%Y%m%dT%H%M%S.%fZ")
     backup = os.path.join(root, f"schema-{from_version}-{stamp}")
     os.mkdir(backup, 0o750)
     for name in state_files(state_dir):

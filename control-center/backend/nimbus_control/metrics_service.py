@@ -94,7 +94,7 @@ class HostSampler:
         total, cores = self.ps.cpu_times(), self.ps.cpu_times(percpu=True)
         cpu = self._busy(self._cpu, total) if self._cpu else 0.0
         if self._cores and len(self._cores) == len(cores):
-            per = [self._busy(a, b) for a, b in zip(self._cores, cores)]
+            per = [self._busy(a, b) for a, b in zip(self._cores, cores, strict=True)]
         else:
             per = [0.0] * len(cores)
         self._cpu, self._cores = total, cores
@@ -230,7 +230,7 @@ class MetricsService:
                 try:
                     await asyncio.wait_for(self._wake.wait(), max(0.05, SAMPLE_SECONDS - (self.clock() - started)))
                     await asyncio.sleep(0.3)               # let a burst of events settle
-                except asyncio.TimeoutError:
+                except TimeoutError:
                     pass
         finally:
             await self._stop_docker()
@@ -367,7 +367,7 @@ class MetricsService:
                 SYSTEMCTL, "list-units", "--failed", "--plain", "--no-legend", "--no-pager", *UNIT_PATTERNS,
                 stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL)
             out, _ = await asyncio.wait_for(proc.communicate(), 15)
-        except (OSError, asyncio.TimeoutError):
+        except (TimeoutError, OSError):
             return self.units
         return sorted(line.split()[0] for line in out.decode("utf-8", "replace").splitlines() if line.strip())
 

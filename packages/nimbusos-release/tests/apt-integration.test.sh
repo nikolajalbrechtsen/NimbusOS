@@ -96,16 +96,16 @@ done
 APT_CONFIG="$APT/apt.conf" apt-get -q update >"$T/update.log" 2>&1 || { cat "$T/update.log"; exit 1; }
 POLICY="$(APT_CONFIG="$APT/apt.conf" apt-cache policy bash nimbus-control docker-ce)"
 echo
-echo "$POLICY" | sed 's/^/    /'
+while IFS= read -r line; do printf '    %s\n' "$line"; done <<<"$POLICY"
 echo
 candidate() { awk -v p="$1:" '$1 == p { want = 1; next } want && $1 == "Candidate:" { print $2; exit }' <<<"$POLICY"; }
-[[ "$(candidate bash)" == "5.2.37-2" ]] && pass "bash comes from Debian (NimbusOS 99.0 and Docker 98.0 are pinned to 1)" \
-	|| fail "bash candidate is $(candidate bash), expected Debian's 5.2.37-2"
-[[ "$(candidate nimbus-control)" == "0.2.0" ]] && pass "nimbus-control comes from the NimbusOS repository (priority 500)" \
-	|| fail "nimbus-control candidate is $(candidate nimbus-control), expected 0.2.0"
-[[ "$(candidate docker-ce)" == "29.0" ]] && pass "docker-ce comes from the Docker repository (priority 500)" \
-	|| fail "docker-ce candidate is $(candidate docker-ce), expected 29.0"
-grep -Eq '^ +99\.0 1$' <<<"$POLICY" && pass "NimbusOS's bash 99.0 has priority 1" || fail "NimbusOS's bash 99.0 is not at priority 1"
+if [[ "$(candidate bash)" == "5.2.37-2" ]]; then pass "bash comes from Debian (NimbusOS 99.0 and Docker 98.0 are pinned to 1)"
+else fail "bash candidate is $(candidate bash), expected Debian's 5.2.37-2"; fi
+if [[ "$(candidate nimbus-control)" == "0.2.0" ]]; then pass "nimbus-control comes from the NimbusOS repository (priority 500)"
+else fail "nimbus-control candidate is $(candidate nimbus-control), expected 0.2.0"; fi
+if [[ "$(candidate docker-ce)" == "29.0" ]]; then pass "docker-ce comes from the Docker repository (priority 500)"
+else fail "docker-ce candidate is $(candidate docker-ce), expected 29.0"; fi
+if grep -Eq '^ +99\.0 1$' <<<"$POLICY"; then pass "NimbusOS's bash 99.0 has priority 1"; else fail "NimbusOS's bash 99.0 is not at priority 1"; fi
 
 # --- nimbus-update's classifier on real apt output -----------------------------
 echo "nimbus-update error classification on real apt output"

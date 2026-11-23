@@ -299,6 +299,7 @@ main() {
 	# os-release(5) allows only 0-9, a-z, ".", "_" and "-" in VERSION_ID, so a
 	# development version such as 0.2.0+git20261117.5.gabc1234 is written as
 	# 0.2.0.git20261117.5.gabc1234 there.
+	# shellcheck disable=SC2034  # read by name when the @NIMBUS_*@ tokens are filled in (os-release, Plasma theme)
 	NIMBUS_OS_VERSION_ID="$(printf '%s' "${NIMBUS_DISPLAY_VERSION,,}" | tr -c '0-9a-z._-' '.')"
 	step "Building ${NIMBUS_NAME} packages $NIMBUS_VERSION (channel $NIMBUS_CHANNEL, commit $NIMBUS_GIT_COMMIT)"
 

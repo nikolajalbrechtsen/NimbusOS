@@ -208,7 +208,7 @@ async def docker_config_check(text, stack_dir, project):
         out, _ = await asyncio.wait_for(proc.communicate(), timeout=60)
     except FileNotFoundError:
         return "The docker command is missing (docker-ce-cli), so the Compose file can't be checked."
-    except asyncio.TimeoutError:
+    except TimeoutError:
         return "Checking the Compose file took too long."
     finally:
         try:

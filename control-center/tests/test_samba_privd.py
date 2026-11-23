@@ -100,7 +100,8 @@ def env(tmp_path, monkeypatch):
         fake.seen.append((conf, text))
         return 0, "", "Loaded services file OK.\n"
     monkeypatch.setattr(samba, "smbd_running", lambda: True)
-    fake.answers += [((samba.TESTPARM,), testparm), ((samba.SMBCONTROL,), (0, "", "")), ((samba.MOUNT,), lambda a, i: mounted.add(a[1]) or (0, "", "")),
+    fake.answers += [((samba.TESTPARM,), testparm), ((samba.SMBCONTROL,), (0, "", "")),
+                     ((samba.MOUNT,), lambda a, i: mounted.add(a[1]) or (0, "", "")),
                      ((samba.UMOUNT,), lambda a, i: mounted.discard(a[1]) or (0, "", ""))]
     monkeypatch.setattr(runner, "run", fake.run)
     return tmp_path, paths, mounted, fake

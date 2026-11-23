@@ -1,0 +1,21 @@
+# =============================================================================
+# .github/dependabot.yml: keep the workflows' action pins current
+# =============================================================================
+# What: once a week, Dependabot opens one pull request that moves every
+#       pinned action (`uses: OWNER/REPO@<sha> # vX.Y.Z`) to its newest
+#       release, updating the SHA and the tag comment together.
+# Why:  docs/PLAN.md NOTE-42 and the review: actions are pinned to commit
+#       SHAs, so updates must come as reviewable pull requests. CI checks the
+#       new pins with tools/pin-actions.sh --check.
+# =============================================================================
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: ci
+    groups:
+      actions:
+        patterns: ["*"]

@@ -16,12 +16,12 @@ import datetime
 from nimbus_control import alerts
 from nimbus_control.libvirt_api import state_of
 
-NOW = datetime.datetime(2026, 11, 23, 12, 0, tzinfo=datetime.timezone.utc).timestamp()
+NOW = datetime.datetime(2026, 11, 23, 12, 0, tzinfo=datetime.UTC).timestamp()
 HOURS = 3600
 
 
 def iso(seconds_ago):
-    return datetime.datetime.fromtimestamp(NOW - seconds_ago, datetime.timezone.utc).isoformat()
+    return datetime.datetime.fromtimestamp(NOW - seconds_ago, datetime.UTC).isoformat()
 
 
 def ids(found):

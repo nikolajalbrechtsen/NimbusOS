@@ -7,6 +7,7 @@
 # Why:  desktop-base registers its active-theme GRUB entries only if this
 #       file exists in the active theme (docs/PLAN.md NOTE-56). With the
 #       NimbusOS GRUB theme active (GRUB_THEME), the theme draws the menu.
+# shellcheck shell=sh disable=SC2034  # 05_debian_theme sources this file and reads these variables
 # =============================================================================
 WALLPAPER=/usr/share/images/desktop-base/desktop-grub.png
 COLOR_NORMAL=light-gray/black

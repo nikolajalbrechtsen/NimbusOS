@@ -1,0 +1,279 @@
+# =============================================================================
+# .github/workflows/release.yml: publish a release from a tag
+# =============================================================================
+# What: on a tag vX.Y.Z (suite stable) or vX.Y.Z-beta.N (suite beta):
+#         check    the tag maps to a version (tools/deb-version.sh), its notes
+#                  exist in docs/release-notes/<tag>.md (docs/PLAN.md
+#                  NOTE-37), and the APT_SIGNING_KEY secret loads and matches
+#                  a committed public key (NOTE-44)
+#         debs     build all seven packages in debian:trixie, with lintian
+#         publish  add them to the suite on gh-pages (tools/publish-apt.sh:
+#                  pool, last 3 versions, signed indexes, releases.json),
+#                  pushed as one fresh commit (NOTE-39)
+#         iso      wait until GitHub Pages serves the release, then build the
+#                  ISO from the same .debs (build/build.sh in a privileged
+#                  debian:trixie container, on the runner's large /mnt disk);
+#                  split it if it is over 2 GiB (tools/split-iso.sh, NOTE-41)
+#         release  sign SHA256SUMS and create the GitHub Release with the
+#                  notes, the download instructions and the ISO (or parts);
+#                  a beta is marked as a pre-release
+#       One publish at a time: release.yml and refresh.yml share the
+#       concurrency group "nimbusos-publish", and a run never cancels another.
+#       Each job gets only the permissions it needs.
+# Why:  spec 4.3 (release.yml) and 4.2 (the APT repository). The signing key
+#       exists only in the secrets APT_SIGNING_KEY and APT_SIGNING_PASSPHRASE
+#       (docs/SIGNING.md); docs/RELEASING.md says how to cut a release.
+# =============================================================================
+name: release
+
+on:
+  push:
+    tags:
+      - "v[0-9]+.[0-9]+.[0-9]+"
+      - "v[0-9]+.[0-9]+.[0-9]+-beta.[0-9]+"
+
+permissions: {}
+
+concurrency:
+  group: nimbusos-publish
+  cancel-in-progress: false
+
+env:
+  DEBIAN_FRONTEND: noninteractive
+  BASE_PACKAGES: git ca-certificates curl gpg gpg-agent gpgv dpkg-dev debhelper devscripts
+  TAG: ${{ github.ref_name }}
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  check:
+    name: check the tag, notes and key
+    runs-on: ubuntu-24.04
+    container: docker.io/library/debian:trixie
+    permissions:
+      contents: read
+    timeout-minutes: 10
+    outputs:
+      display: ${{ steps.version.outputs.display }}
+      channel: ${{ steps.version.outputs.channel }}
+      fingerprint: ${{ steps.key.outputs.fingerprint }}
+    steps:
+      - name: Install the tools
+        run: |
+          apt-get update -q
+          apt-get install -y -q --no-install-recommends $BASE_PACKAGES
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - name: Trust the checkout (the container runs as root)
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+      - name: Version from the tag
+        id: version
+        run: |
+          eval "$(tools/deb-version.sh --tag "$TAG" --env)"
+          echo "Releasing $NIMBUS_DISPLAY_VERSION ($NIMBUS_VERSION) to $NIMBUS_SUITE"
+          echo "display=$NIMBUS_DISPLAY_VERSION" >>"$GITHUB_OUTPUT"
+          echo "channel=$NIMBUS_CHANNEL" >>"$GITHUB_OUTPUT"
+      - name: Release notes (docs/release-notes/<tag>.md)
+        run: |
+          notes="docs/release-notes/$TAG.md"
+          if [[ ! -s "$notes" ]]; then
+            echo "::error file=$notes::$notes is missing. Write the release notes, commit them, and tag again (docs/RELEASING.md)."
+            exit 1
+          fi
+      - name: The signing key matches a committed public key
+        id: key
+        env:
+          APT_SIGNING_KEY: ${{ secrets.APT_SIGNING_KEY }}
+          APT_SIGNING_PASSPHRASE: ${{ secrets.APT_SIGNING_PASSPHRASE }}
+        run: |
+          fingerprint="$(GNUPGHOME="$RUNNER_TEMP/gnupg" tools/import-signing-key.sh)"
+          echo "fingerprint=$fingerprint" >>"$GITHUB_OUTPUT"
+
+  debs:
+    name: build the packages
+    needs: check
+    runs-on: ubuntu-24.04
+    container: docker.io/library/debian:trixie
+    permissions:
+      contents: read
+    timeout-minutes: 40
+    steps:
+      - name: Install the tools
+        run: |
+          apt-get update -q
+          apt-get install -y -q --no-install-recommends $BASE_PACKAGES
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - name: Trust the checkout (the container runs as root)
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+      - name: tools/build-debs.sh with lintian
+        run: tools/build-debs.sh --tag "$TAG" --install-build-deps --lintian --out _build/debs
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: debs
+          path: _build/debs/*.deb
+          if-no-files-found: error
+          retention-days: 14
+
+  publish:
+    name: publish to the APT repository
+    needs: [check, debs]
+    runs-on: ubuntu-24.04
+    container: docker.io/library/debian:trixie
+    permissions:
+      contents: write
+    timeout-minutes: 20
+    steps:
+      - name: Install the tools
+        run: |
+          apt-get update -q
+          apt-get install -y -q --no-install-recommends $BASE_PACKAGES apt-utils xz-utils python3
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - name: Trust the checkout (the container runs as root)
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: debs
+          path: debs
+      - name: Get the published tree (gh-pages)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          url="https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          if git ls-remote --exit-code --heads "$url" gh-pages >/dev/null; then
+            git clone --quiet --depth 1 --branch gh-pages "$url" "$RUNNER_TEMP/site"
+            rm -rf "$RUNNER_TEMP/site/.git"
+          else
+            echo "No gh-pages branch yet: this release creates the repository."
+            mkdir -p "$RUNNER_TEMP/site"
+          fi
+      - name: Add the release, prune, sign
+        env:
+          APT_SIGNING_KEY: ${{ secrets.APT_SIGNING_KEY }}
+          APT_SIGNING_PASSPHRASE: ${{ secrets.APT_SIGNING_PASSPHRASE }}
+        run: |
+          export GNUPGHOME="$RUNNER_TEMP/gnupg"
+          key="$(tools/import-signing-key.sh)"
+          tools/publish-apt.sh add --site "$RUNNER_TEMP/site" --key "$key" --tag "$TAG" --debs debs \
+            --notes "docs/release-notes/$TAG.md"
+          tools/publish-apt.sh check --site "$RUNNER_TEMP/site"
+      - name: Push gh-pages as one fresh commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cd "$RUNNER_TEMP/site"
+          git init --quiet --initial-branch gh-pages
+          git add --all
+          git -c user.name="github-actions[bot]" -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+            commit --quiet -m "Publish $TAG"
+          git push --quiet --force "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" gh-pages
+
+  iso:
+    name: build the ISO
+    needs: [check, publish]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    timeout-minutes: 240
+    env:
+      WORK: /mnt/nimbus
+    steps:
+      - name: Free disk space (live-build needs 40 GiB)
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL /usr/local/share/boost
+          sudo docker image prune --all --force >/dev/null
+          sudo mkdir -p "$WORK"
+          df -h / /mnt
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: debs
+          path: debs
+      - name: Wait until GitHub Pages serves the release
+        run: |
+          url="$(bash -c '. build/lib/common.sh && nimbus_load_conf && printf %s "$NIMBUS_RELEASES_JSON_URL"')"
+          for _ in $(seq 60); do
+            if curl -fsSL --max-time 20 "$url" 2>/dev/null | grep -q "\"tag\": \"$TAG\""; then
+              echo "Pages serves $TAG."
+              exit 0
+            fi
+            sleep 20
+          done
+          echo "::error::GitHub Pages didn't serve $TAG within 20 minutes ($url). Check Settings > Pages (docs/RELEASING.md)."
+          exit 1
+      - name: build/build.sh from the published .debs
+        run: |
+          sudo docker run --rm --privileged \
+            --volume "$GITHUB_WORKSPACE:/src" --volume "$WORK:$WORK" --workdir /src \
+            --env TAG --env DEBIAN_FRONTEND --env NIMBUS_WORK_DIR="$WORK/work" --env NIMBUS_OUTPUT_DIR="$WORK/dist" \
+            docker.io/library/debian:trixie bash -c '
+              set -euo pipefail
+              apt-get update -q
+              apt-get install -y -q --no-install-recommends git ca-certificates curl gpg gpgv
+              git config --global --add safe.directory /src
+              build/build.sh --debs-dir /src/debs --tag "$TAG"'
+      - name: Split if needed, write SHA256SUMS and the instructions
+        env:
+          FINGERPRINT: ${{ needs.check.outputs.fingerprint }}
+        run: |
+          sudo chown -R "$(id -u)" "$WORK/dist"
+          tools/split-iso.sh --iso "$WORK/dist/nimbusos-amd64.iso" --out "$WORK/release" \
+            --instructions "$WORK/release-instructions.md" --fingerprint "$FINGERPRINT"
+          mv "$WORK/release-instructions.md" "$WORK/release/"
+          ls -l "$WORK/release"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: iso
+          path: /mnt/nimbus/release/
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0
+
+  release:
+    name: create the GitHub Release
+    needs: [check, iso]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: iso
+          path: release
+      - name: Sign SHA256SUMS
+        env:
+          APT_SIGNING_KEY: ${{ secrets.APT_SIGNING_KEY }}
+          APT_SIGNING_PASSPHRASE: ${{ secrets.APT_SIGNING_PASSPHRASE }}
+        run: |
+          export GNUPGHOME="$RUNNER_TEMP/gnupg"
+          key="$(tools/import-signing-key.sh)"
+          printf '%s' "$APT_SIGNING_PASSPHRASE" | gpg --batch --yes --pinentry-mode loopback --passphrase-fd 0 \
+            --local-user "$key" --digest-algo SHA512 --armor --detach-sign --output release/SHA256SUMS.gpg release/SHA256SUMS
+          gpg --batch --verify release/SHA256SUMS.gpg release/SHA256SUMS
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DISPLAY_VERSION: ${{ needs.check.outputs.display }}
+          CHANNEL: ${{ needs.check.outputs.channel }}
+        run: |
+          { grep -v '^Restart-Required:' "docs/release-notes/$TAG.md"; echo; cat release/release-instructions.md; } >"$RUNNER_TEMP/body.md"
+          rm release/release-instructions.md
+          flags=()
+          [[ "$CHANNEL" != beta ]] || flags+=(--prerelease)
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release edit "$TAG" --notes-file "$RUNNER_TEMP/body.md"
+            gh release upload "$TAG" release/* --clobber
+          else
+            gh release create "$TAG" release/* --verify-tag --title "NimbusOS $DISPLAY_VERSION" \
+              --notes-file "$RUNNER_TEMP/body.md" "${flags[@]}"
+          fi

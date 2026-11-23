@@ -15,7 +15,8 @@
 # =============================================================================
 
 from dataclasses import dataclass, field
-from typing import Any, Callable
+from typing import Any
+from collections.abc import Callable
 
 from nimbus_common.validate import ValidationError
 

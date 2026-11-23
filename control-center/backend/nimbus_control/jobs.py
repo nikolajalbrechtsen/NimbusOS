@@ -63,7 +63,7 @@ class Job:
                 self.log(raw.decode("utf-8", "replace").rstrip("\n"))
         try:
             await asyncio.wait_for(asyncio.gather(pump(), proc.wait()), timeout=timeout)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             proc.kill()
             raise JobFailed(f"{os.path.basename(argv[0])} did not finish within {timeout // 60} minutes.") from None
         if proc.returncode != 0:

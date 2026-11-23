@@ -106,6 +106,7 @@ def test_linux_uefi_vm(env):
 
 def test_console_through_websockify(env):
     import websockets.sync.client as wsc
+    from websockets.exceptions import WebSocketException
     svc, lv, tokens = env
     console = run(svc.console("it-linux"))
     assert len(console["password"]) == 8
@@ -114,7 +115,7 @@ def test_console_through_websockify(env):
         ws.send(b"RFB 003.008\n")
         types = ws.recv(timeout=10)
         assert types[0] >= 1 and 2 in types[1:1 + types[0]]          # 2: VNC password authentication
-    with pytest.raises(Exception):
+    with pytest.raises((WebSocketException, OSError)):                 # refused: an HTTP error or a closed socket
         with wsc.connect("ws://127.0.0.1:6080/websockify?token=wrong", subprotocols=["binary"]) as ws:
             ws.recv(timeout=5)
 
