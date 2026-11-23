@@ -6,6 +6,14 @@
 #       updates) with argument lists, never a shell (docs/PLAN.md NOTE-15).
 #       Its state is /var/lib/nimbus-privd and /var/cache/nimbus-privd
 #       (tmpfiles.d).
+#       It runs in the system's own mount namespace: no PrivateTmp=,
+#       ProtectSystem=, ReadWritePaths= or other option that makes one. Any
+#       of them gives privd a namespace from which mounts don't propagate
+#       back, so the disks, the mergerfs pool and the ISO bind mount it mounts
+#       would exist only for privd, not for Samba or the desktop (found in the
+#       QEMU test, docs/PLAN.md NOTE-72; test_units.py checks it). Temporary
+#       files, such as smbclient's credentials file, go to its own runtime
+#       directory instead of /tmp.
 # Why:  docs/PLAN.md §4.1 and §4.3. No [Install]: only the socket is enabled.
 # =============================================================================
 [Unit]
@@ -18,8 +26,10 @@ After=nimbus-privd.socket
 Type=exec
 ExecStart=/usr/lib/nimbus-control/privd/nimbus-privd.py
 UMask=0022
+RuntimeDirectory=nimbus-privd
+RuntimeDirectoryMode=0700
+Environment=TMPDIR=/run/nimbus-privd
 NoNewPrivileges=yes
-PrivateTmp=yes
 LockPersonality=yes
 RestrictRealtime=yes
 SystemCallArchitectures=native
