@@ -17,7 +17,9 @@
 #         - deleting with the disk removes the disk, the UEFI variables and
 #           the TPM state.
 #       Skipped unless NIMBUS_TEST_LIBVIRT=1 (set by
-#       tests/integration/vm-libvirt.sh, which starts libvirtd).
+#       tests/integration/vm-libvirt.sh, which starts libvirtd). With
+#       NIMBUS_TEST_TCG=1 the VMs use QEMU's emulator even where KVM works
+#       (ci.yml, docs/PLAN.md NOTE-71).
 # Why:  the fakes in test_vms.py follow libvirt's behaviour; this checks
 #       that they do (docs/PLAN.md NOTE-67).
 # =============================================================================
@@ -47,6 +49,9 @@ def env(tmp_path_factory):
     with open(os.path.join(ISOS, "blank.iso"), "wb") as f:
         f.write(b"\0" * 1024 * 1024)
     lv = LibvirtApi("qemu:///system", IMAGES)
+    if os.environ.get("NIMBUS_TEST_TCG") == "1":            # CI: KVM nested in GitHub's VMs (vm-libvirt.sh)
+        real_host = lv.host
+        lv.host = lambda: {**real_host(), "kvm": False}
     svc = VmService(lv, IsoLibrary(ISOS, 2 ** 30), str(tokens), bridges=lambda: [])
     ws = subprocess.Popen(["websockify", "--token-plugin=TokenFile", f"--token-source={tokens}", "127.0.0.1:6080"],
                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)

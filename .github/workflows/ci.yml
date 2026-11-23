@@ -156,7 +156,7 @@ jobs:
             run: control-center/tests/integration/nas-integration.sh
             privileged: true
           - name: "Control Center: VMs (libvirt, QEMU, websockify)"
-            run: control-center/tests/integration/vm-libvirt.sh
+            run: env NIMBUS_TEST_TCG=1 control-center/tests/integration/vm-libvirt.sh
             privileged: true
           - name: "Control Center: Docker's streaming API"
             run: control-center/tests/integration/docker-streams.sh

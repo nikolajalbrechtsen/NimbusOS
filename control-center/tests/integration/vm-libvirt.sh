@@ -18,7 +18,7 @@
 # Why:  docs/PLAN.md NOTE-67: the fakes in test_vms.py are checked against
 #       the real thing.
 #
-# Usage: control-center/tests/integration/vm-libvirt.sh [OUT_DIR]
+# Usage: [NIMBUS_TEST_TCG=1] control-center/tests/integration/vm-libvirt.sh [OUT_DIR]
 #        Root, in a privileged throwaway container only
 #        (tools/dev-shell.sh --privileged). Network (deb.debian.org).
 # =============================================================================
@@ -51,6 +51,12 @@ remember_owner = 0
 security_driver = "none"
 cgroup_controllers = [ ]
 EOF
+# NIMBUS_TEST_TCG=1 (exported to test_vm_libvirt.py): the VMs use QEMU's
+# emulator even where KVM works. ci.yml sets it: on GitHub's runners KVM is
+# nested inside their virtual machine, and QEMU processes there got stuck so
+# that SIGKILL couldn't end them ("Failed to terminate process … Device or
+# resource busy", docs/PLAN.md NOTE-71).
+export NIMBUS_TEST_TCG="${NIMBUS_TEST_TCG:-}"
 mkdir -p /run/libvirt /var/lib/nimbus-vms/isos /var/lib/nimbus-vms/images
 /usr/sbin/virtlogd -d
 /usr/sbin/libvirtd -d
