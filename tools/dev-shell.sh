@@ -64,8 +64,10 @@ prepare_clone() {
 	# from the environment for it, so the safe.directory passed in by
 	# run_host doesn't reach it. With rootful Podman or Docker the checkout's
 	# owner differs from root here, and git would refuse. This container's
-	# own (throwaway) global config trusts it instead.
+	# own (throwaway) global config trusts it instead; upload-pack names the
+	# repository by its .git directory.
 	git config --global --add safe.directory /src
+	git config --global --add safe.directory /src/.git
 	git clone -q /src /work
 	git -C /src diff HEAD --binary >"$patch"
 	if [[ -s "$patch" ]]; then
