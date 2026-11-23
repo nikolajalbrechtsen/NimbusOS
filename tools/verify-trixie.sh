@@ -64,6 +64,16 @@ candidate() {
 	printf '%s' "$c"
 }
 
+# provided NAME [VERSION] — true if a real package provides the virtual package
+# NAME (with "= VERSION" when VERSION is given), as debhelper provides
+# "debhelper-compat (= 13)". apt-cache policy has no candidate for those.
+provided() {
+	aptx apt-cache showpkg -- "$1" 2>/dev/null | awk -v want="${2:+(= $2)}" '
+		/^Reverse Provides:/ { in_rp = 1; next }
+		in_rp && NF >= 2 { if (want == "" || index($0, want)) found = 1 }
+		END { exit !found }'
+}
+
 # component PKG — archive area of the candidate (main, non-free-firmware, ...).
 component() {
 	aptx apt-cache show --no-all-versions -- "$1" 2>/dev/null \
@@ -93,7 +103,7 @@ control_relations() {
 }
 
 main() {
-	local dir list f pkg parsed cand comp log lbdir group alt ok ctrl n line
+	local dir list f pkg parsed cand comp log lbdir group alt exact ok ctrl n line
 	local -a chroot_lists binary_lists pkgs chroot_pkgs=() all_pkgs=() controls watch alts
 	local -A from=() is_own=() binary_of=()
 
@@ -232,9 +242,10 @@ EOF
 			IFS='|' read -r -a alts <<<"$group"
 			ok=""
 			for alt in "${alts[@]}"; do
+				exact="$(sed -nE 's/.*\([[:space:]]*=[[:space:]]*([^)[:space:]]+)[[:space:]]*\).*/\1/p' <<<"$alt")"
 				alt="$(sed -E -e 's/\([^)]*\)//g' -e 's/\[[^]]*\]//g' -e 's/<[^>]*>//g' -e 's/:(any|native)//' -e 's/[[:space:]]//g' <<<"$alt")"
 				[[ -n "$alt" ]] || continue
-				if [[ -n "${is_own[$alt]:-}" || -n "$(candidate "$alt")" ]]; then
+				if [[ -n "${is_own[$alt]:-}" || -n "$(candidate "$alt")" ]] || provided "$alt" "$exact"; then
 					ok=1
 					break
 				fi

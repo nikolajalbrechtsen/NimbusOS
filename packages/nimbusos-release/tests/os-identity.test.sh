@@ -11,8 +11,9 @@
 #           ${distro_codename}) still reports the codename trixie;
 #         - unattended-upgrade --dry-run --debug: the allowed origins expand to
 #           Debian / trixie-security only, and a package with a pending
-#           security update (ntfs-3g, installed at its older trixie version)
-#           is picked up;
+#           security update (the smallest one trixie-security has newer than
+#           trixie, installed at its trixie version) is picked up; skipped,
+#           and said so, when a point release has just folded them all in;
 #         - apt-get -s dist-upgrade sees that update from Debian-Security;
 #         - Docker's source (the real docker.list.binary, rendered as build.sh
 #           renders it) resolves to trixie, as does Docker's documented
@@ -88,20 +89,52 @@ check "lsb_release -cs says trixie" test "$(lsb_release -cs 2>/dev/null)" = trix
 
 echo
 echo "unattended-upgrades"
-# A package with a pending security update: install its older trixie version.
-security_version="$(apt-cache policy ntfs-3g | awk '/security.debian.org/ { print prev; exit } { prev = $1 }')"
-apt-get install -y -q --no-install-recommends ntfs-3g/trixie >/tmp/ntfs.log 2>&1 || { cat /tmp/ntfs.log; exit 1; }
-installed_version="$(dpkg-query -W -f='${Version}' ntfs-3g)"
-echo "ntfs-3g installed: $installed_version; candidate from trixie-security: ${security_version:-none}" | show "dpkg-query ntfs-3g"
+# A package with a pending security update: one whose trixie-security version
+# is newer than trixie's (the smallest such package), installed at its older
+# trixie version. Which package that is changes over time: a Debian point
+# release folds the security fixes into trixie itself.
+index_versions() {   # index_versions SUITE: "package version installed-size" from its amd64 Packages index
+	local f
+	apt-get indextargets --format '$(FILENAME)' "Release: $1" "Identifier: Packages" "Architecture: amd64" 2>/dev/null \
+		| while IFS= read -r f; do [[ -e "$f" ]] && /usr/lib/apt/apt-helper cat-file "$f"; done \
+		| awk '/^Package: / { p = $2 } /^Version: / { v = $2 } /^Installed-Size: / { s = $2 }
+		       /^$/ { if (p != "") print p, v, s; p = v = s = "" } END { if (p != "") print p, v, s }'
+}
+declare -A trixie_version=()
+while read -r p v _; do trixie_version[$p]="$v"; done < <(index_versions trixie)
+mapfile -t security_index < <(index_versions trixie-security | sort -k3,3n)
+pkg=""
+for line in "${security_index[@]}"; do
+	read -r p v _ <<<"$line"
+	if [[ -z "${trixie_version[$p]:-}" ]] || ! dpkg --compare-versions "$v" gt "${trixie_version[$p]}"; then continue; fi
+	# Its old version must install on its own (exact-version dependencies on
+	# siblings, as in roundcube, would pull the new ones in).
+	apt-get install -s -q --no-install-recommends "$p/trixie" >/dev/null 2>&1 || continue
+	pkg="$p"
+	security_version="$v"
+	break
+done
+if [[ -n "$pkg" ]]; then
+	apt-get install -y -q --no-install-recommends "$pkg/trixie" >/tmp/old.log 2>&1 || { cat /tmp/old.log; exit 1; }
+	echo "$pkg installed: $(dpkg-query -W -f='${Version}' "$pkg"); candidate from trixie-security: $security_version" \
+		| show "dpkg-query $pkg (the smallest package with a pending security update)"
+else
+	echo "No package in trixie-security is newer than in trixie right now (a point release folded them in)." \
+		| show "pending security updates"
+fi
 unattended-upgrade --dry-run --debug >/tmp/uu.log 2>&1 || true
 grep -E 'Allowed origins are|Packages that will be upgraded|Initial (whitelist|blacklist)' /tmp/uu.log | show "unattended-upgrade --dry-run --debug (excerpt)"
 check "allowed origins: only the two Debian-Security patterns, expanded to trixie" \
 	grep -q "Allowed origins are: origin=Debian,codename=trixie,label=Debian-Security, origin=Debian,codename=trixie-security,label=Debian-Security" /tmp/uu.log
-check "the pending security update (ntfs-3g) would be installed" grep -qE 'Packages that will be upgraded:.*ntfs-3g' /tmp/uu.log
-
 apt-get -s dist-upgrade 2>/dev/null | grep -E '^Inst ' | show "apt-get -s dist-upgrade (Inst lines)"
-check "apt-get -s dist-upgrade takes ntfs-3g from Debian-Security" \
-	sh -c 'apt-get -s dist-upgrade | grep -E "^Inst ntfs-3g .*Debian-Security"'
+if [[ -n "$pkg" ]]; then
+	check "the pending security update ($pkg) would be installed" grep -qE "Packages that will be upgraded:.* $pkg( |\$)" /tmp/uu.log
+	check "apt-get -s dist-upgrade takes $pkg from Debian-Security" \
+		sh -c 'apt-get -s dist-upgrade | grep -E "^Inst $1 .*Debian-Security"' _ "$pkg"
+else
+	echo "  SKIP  a pending security update would be installed (none is pending today)"
+	echo "  SKIP  apt-get -s dist-upgrade takes it from Debian-Security"
+fi
 
 echo
 echo "Docker source"

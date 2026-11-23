@@ -877,7 +877,11 @@ Until batch 5, the router shows a clear "could not be shown" state for a page wh
   - `README.md` is for people visiting the project: download, verify, install, updates, security (NOTE-22, NOTE-45), building.
   - `docs/RELEASING.md` and `docs/SIGNING.md` are for the maintainer. The key's user ID has no e-mail address. It expires after 3 years, with the steps to extend it, rotate it, or act on a leak in an order installed systems can follow.
   - `docs/release-notes/v0.1.0.md` holds the first release's notes.
-- **What couldn't be tested here:** the workflows on GitHub itself (runners, secrets, Pages). Every script they call is tested above. `ci.yml` first runs when this deliverable is pushed. `release.yml` and `refresh.yml` need the one-time setup in `docs/RELEASING.md` (the key and the secrets); until then, refresh's weekly re-signing fails with the message that the secret is missing.
+- **What couldn't be tested here:** the workflows on GitHub itself (runners, secrets, Pages). Every script they call is tested above. `release.yml` and `refresh.yml` need the one-time setup in `docs/RELEASING.md` (the key and the secrets); until then, refresh's weekly re-signing fails with the message that the secret is missing.
+- **Found by the first `ci.yml` run on GitHub.** Two network checks failed. Both were reproduced locally and fixed:
+  - **`tools/verify-trixie.sh` rejected `debhelper-compat (= 13)`** in every package's Build-Depends. It is a virtual package that debhelper provides with a version, and `apt-cache policy` shows no candidate for virtual packages. The check had never seen it: when it was written (deliverable 3), the packages didn't exist yet and were skipped. It now also accepts a dependency that a real package provides, with the provided version when the relation names one (`provided()`, from `apt-cache showpkg`'s Reverse Provides).
+  - **`os-identity.test.sh` relied on `ntfs-3g`** having a pending security update. Debian 13.8 folded that fix into trixie, so no update was pending any more. The test now picks the package itself: the smallest one whose trixie-security version is newer than trixie's and whose trixie version installs on its own (apt simulates it first). It says so and skips those two checks if a point release has just folded every fix in.
+  - All other jobs passed on GitHub's runners, including the privileged NAS and Docker tests.
 
 ### Found by the Trixie archive check (deliverable 3)
 
