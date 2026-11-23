@@ -692,6 +692,13 @@ nimbus_lb_config_args() {
 		# Non-interactive, with retries for flaky mirrors.
 		--apt-options "--yes -o Acquire::Retries=5"
 		--debconf-frontend noninteractive
+		# Docker's keyring package (a local .deb in config/packages.chroot)
+		# next to Debian's, installed whenever live-build prepares a chroot's
+		# APT sources. live-build's installer stage switches a bare copy of
+		# the bootstrap to the image's final sources, and docker.list.binary's
+		# Signed-By file comes from this package; without it apt refuses
+		# Docker's repository there and the build stops (docs/PLAN.md NOTE-72).
+		--keyring-packages "debian-archive-keyring nimbusos-docker-keyring"
 
 		# CA certificates in the bootstrapped system: Docker's source
 		# (config/archives/docker.list.chroot) is HTTPS, and apt in the fresh
