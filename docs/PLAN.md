@@ -1246,7 +1246,8 @@ How to read it: the NimbusOS and Docker repositories offer `bash` 99.0 and 98.0,
   - `apt-integration.test.sh` 6;
   - `catalog.test.sh` 32;
   - `vm-libvirt.sh` 7 (real libvirt).
-- **The workflows:** checked against themselves (every `needs`, output, step id, matrix key and permission), and every action is pinned to its tag's commit (`tools/pin-actions.sh --check`). Their first run on GitHub is the push of this deliverable.
+- **The workflows:** checked against themselves (every `needs`, output, step id, matrix key and permission), and every action is pinned to its tag's commit (`tools/pin-actions.sh --check`).
+- **On GitHub:** the first `ci.yml` run found three problems (NOTE-71), all fixed. Run 45230381774, for commit `af30c42`, then passed all 21 jobs on GitHub's runners. `release.yml` and `refresh.yml` haven't run yet; they need the signing key and the secrets (`docs/RELEASING.md`, one-time setup).
 
 **os-release, unattended-upgrades, Docker and Calamares** (`os-identity.test.sh`, NimbusOS os-release installed). Excerpts:
 
