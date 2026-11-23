@@ -2,9 +2,13 @@
 # nimbus_control/docker_api.py: what Docker says about the apps
 # =============================================================================
 # What: DockerApi wraps the Docker SDK (python3-docker) for the read side:
-#         containers()       every Compose-managed container with its
+#         containers(prefixes) every Compose-managed container with its
 #                            project, service, state, exit code, health,
-#                            restart count and published ports
+#                            restart count and published ports; also the
+#                            unlabelled containers whose names start with
+#                            one of PREFIXES (an app's companions, NOTE-29),
+#                            with an empty project
+#         volumes()          Docker volume names
 #         published_ports()  {(protocol, host port)} in use by any container
 #         networks()         Docker network names (Advanced install)
 #       Calls block, so the API runs them in a worker thread. If Docker
@@ -35,10 +39,15 @@ class DockerApi:
             self._client = None
             raise DockerUnavailable(UNAVAILABLE) from exc
 
-    def containers(self):
+    def containers(self, prefixes=()):
         client = self._docker()
         try:
             found = client.containers.list(all=True, filters={"label": "com.docker.compose.project"})
+            ids = {c.id for c in found}
+            for prefix in prefixes:                   # "name" matches anywhere in the name: checked below
+                found += [c for c in client.containers.list(all=True, filters={"name": prefix})
+                          if c.id not in ids and c.name.startswith(prefix)]
+                ids = {c.id for c in found}
         except Exception as exc:              # the SDK's errors, and requests' when the daemon went away
             self._client = None
             raise DockerUnavailable(UNAVAILABLE) from exc
@@ -73,6 +82,14 @@ class DockerApi:
         client = self._docker()
         try:
             return sorted(n.name for n in client.networks.list())
+        except Exception as exc:
+            self._client = None
+            raise DockerUnavailable(UNAVAILABLE) from exc
+
+    def volumes(self):
+        client = self._docker()
+        try:
+            return sorted(v.name for v in client.volumes.list())
         except Exception as exc:
             self._client = None
             raise DockerUnavailable(UNAVAILABLE) from exc

@@ -128,6 +128,25 @@ def test_host_network_drops_ports_and_adds_host_paths():
     assert "environment" not in mon
 
 
+def test_default_bridge_hostname_and_host_facts():
+    tpl = ('services:\n  dns:\n    image: x\n    network_mode: "bridge"\n    hostname: {{ hostname | q }}\n'
+           '    environment:\n      TZ: {{ timezone | q }}\n      PGID: {{ share_gid | string | q }}\n')
+    inputs = {"name": "aio", "ports": [{"id": "admin", "container": 80, "host": 8081, "protocol": "tcp", "ip": ""}],
+              "volumes": [], "env": {}, "network_mode": "bridge", "restart": "always"}
+    _, doc = compose.build(manifest("demo-dns"), tpl, inputs, hostname="nimbus", timezone="Europe/Copenhagen", share_gid=1001)
+    dns = doc["services"]["dns"]
+    assert dns["network_mode"] == "bridge" and dns["ports"] == ["8081:80/tcp"]       # Docker's default bridge, kept
+    assert dns["hostname"] == "nimbus" and dns["environment"] == {"TZ": "Europe/Copenhagen", "PGID": "1001"}
+    _, doc = compose.build(manifest("demo-dns"), tpl, {**inputs, "network_mode": "proxy"}, hostname="nimbus")
+    assert "network_mode" not in doc["services"]["dns"] and doc["services"]["dns"]["networks"] == ["proxy"]
+    _, doc = compose.build(manifest("demo-dns"), tpl, {**inputs, "network_mode": "host"}, hostname="nimbus")
+    dns = doc["services"]["dns"]
+    assert dns["network_mode"] == "host" and "hostname" not in dns and "ports" not in dns      # Docker refuses both
+    assert dns["environment"]["TZ"] == "Etc/UTC" and dns["environment"]["PGID"] == "0"        # the defaults
+    _, doc = compose.build(manifest("demo-dns"), "services:\n  dns:\n    image: x\n", inputs)
+    assert "network_mode" not in doc["services"]["dns"]                                 # bridge: the project's network
+
+
 def test_template_must_have_the_main_service():
     with pytest.raises(compose.ComposeError, match="no service 'web'"):
         compose.build(manifest("demo-web"), "services:\n  other:\n    image: x\n", web_inputs())

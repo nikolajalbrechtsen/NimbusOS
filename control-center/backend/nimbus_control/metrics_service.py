@@ -10,7 +10,8 @@
 #         Docker   one non-blocking stats(stream=1) reader per running
 #                  container (docker_stream.py): CPU as a share of the host,
 #                  memory = usage − inactive_file, summed per Compose project
-#                  (one row per app); one /events reader wakes the collector
+#                  (one row per app; an app's companions, the containers
+#                  Nextcloud AIO makes itself, count with it, NOTE-29); one /events reader wakes the collector
 #                  at once on die, oom, health_status and restart, so an alert
 #                  appears within a sample; containers and app states are
 #                  listed again every 10 seconds or after an event
@@ -269,11 +270,15 @@ class MetricsService:
 
     async def _refresh_containers(self, now):
         self._containers_at, self._dirty = now, False
+        prefixes = self.apps.companion_prefixes()
         try:
-            self.containers = await asyncio.to_thread(self.docker.containers)
+            self.containers = await asyncio.to_thread(self.docker.containers, tuple(prefixes))
             self.docker_problem = None
         except DockerUnavailable as exc:
             self.containers, self.docker_problem = [], str(exc)
+        for c in self.containers:                      # an app's companions count as the app (NOTE-29)
+            if not c["project"]:
+                c["companion_of"] = next((app for p, app in prefixes.items() if c["name"].startswith(p)), "")
         running = {c["id"] for c in self.containers if c["state"] == "running"}
         for cid in running - set(self.readers):
             self.readers[cid] = asyncio.get_running_loop().create_task(self._read_stats(cid))
@@ -309,9 +314,10 @@ class MetricsService:
         out = {}
         for c in self.containers:
             u = self.usage.get(c["id"])
-            if not u or not c["project"]:
+            app = c["project"] or c.get("companion_of")
+            if not u or not app:
                 continue
-            row = out.setdefault(c["project"], {"cpu": 0.0, "memory": 0, "containers": 0})
+            row = out.setdefault(app, {"cpu": 0.0, "memory": 0, "containers": 0})
             row["cpu"] += u["cpu"]
             row["memory"] += u["memory"]
             row["containers"] += 1

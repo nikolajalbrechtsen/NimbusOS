@@ -1,0 +1,8 @@
+{# catalog/jellyfin/docker-compose.yml.j2: Jellyfin, as in its container
+   install guide: the latest image (the latest stable release), the web page
+   on 8096, client discovery on 7359/udp, /config, /cache and the media
+   library at /media (the media share, by share_hint).
+   The engine adds the ports, volumes, environment and restart policy. #}
+services:
+  jellyfin:
+    image: "docker.io/jellyfin/jellyfin:latest"

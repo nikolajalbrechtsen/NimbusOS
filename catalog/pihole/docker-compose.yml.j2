@@ -1,0 +1,14 @@
+{# catalog/pihole/docker-compose.yml.j2: Pi-hole v6, as in docker-pi-hole's
+   README: the latest image, DNS on 53/tcp+udp, the admin page on container
+   port 80, /etc/pihole, the admin password in
+   FTLCONF_webserver_api_password and FTLCONF_dns_listeningMode ALL (needed
+   on a bridge network). DNS is bound to the LAN address (manifest bind:
+   lan), since libvirt's dnsmasq holds 192.168.122.1:53 (docs/PLAN.md
+   NOTE-18). No extra capabilities: they're only for DHCP and NTP.
+   The engine adds the ports, volumes, environment and restart policy. #}
+services:
+  pihole:
+    image: "docker.io/pihole/pihole:latest"
+    environment:
+      TZ: {{ timezone | q }}
+      FTLCONF_dns_listeningMode: "ALL"

@@ -1,0 +1,15 @@
+{# catalog/home-assistant/docker-compose.yml.j2: Home Assistant Container,
+   as in its Linux install guide: the stable image, host networking
+   (manifest network_mode), /config, /run/dbus read-only for Bluetooth
+   (manifest host_paths), TZ, and 60 seconds to close its database on stop.
+   Not "privileged: true": the guide doesn't say what it needs it for, and
+   it would give the container every device on the computer (docs/PLAN.md
+   NOTE-70). The time zone comes from TZ instead of mounting /etc/localtime.
+   The engine adds the volumes, environment, network mode and restart
+   policy. #}
+services:
+  homeassistant:
+    image: "ghcr.io/home-assistant/home-assistant:stable"
+    stop_grace_period: "60s"
+    environment:
+      TZ: {{ timezone | q }}

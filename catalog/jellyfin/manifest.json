@@ -1,0 +1,19 @@
+{
+  "id": "jellyfin",
+  "name": "Jellyfin",
+  "description": "Stream your films, series and music to TVs, phones and browsers.",
+  "category": "Media",
+  "template_version": 1,
+  "main_service": "jellyfin",
+  "ports": [
+    {"id": "http", "container": 8096, "host": 8096, "description": "Web page and the apps' server address"},
+    {"id": "discovery", "container": 7359, "host": 7359, "protocol": "udp", "description": "Lets Jellyfin apps on your network find the server"}
+  ],
+  "volumes": [
+    {"id": "config", "container": "/config", "default": "config", "description": "Settings, users and the library database"},
+    {"id": "cache", "container": "/cache", "default": "cache", "description": "Images and transcoding cache"},
+    {"id": "media", "container": "/media", "default": "media", "share_hint": "media", "description": "Your media: the media share when it exists"}
+  ],
+  "webui": {"port": "http", "path": "/"},
+  "notes": "On the first visit, Jellyfin's setup wizard creates your user; add libraries from /media, which is your media share. DLNA needs host networking (Advanced, Network: Host)."
+}

@@ -1,0 +1,11 @@
+{# catalog/nginx-proxy-manager/docker-compose.yml.j2: Nginx Proxy Manager,
+   as in its setup guide: the public ports 80 and 443, the admin page on 81,
+   /data and /etc/letsencrypt, TZ. The image tag is the README's latest (the
+   guide pins one release). No INITIAL_ADMIN_* variables: NPM logs that
+   password in plain text; its first-run page creates the admin instead.
+   The engine adds the ports, volumes, environment and restart policy. #}
+services:
+  nginx-proxy-manager:
+    image: "docker.io/jc21/nginx-proxy-manager:latest"
+    environment:
+      TZ: {{ timezone | q }}

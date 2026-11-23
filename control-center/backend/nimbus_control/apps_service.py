@@ -18,6 +18,10 @@
 #         through privd, NOTE-31); each writes
 #         /var/lib/nimbus-control/stacks/<name>/docker-compose.yml and runs
 #         "docker compose" with an argument list;
+#       - an app marked single_instance is refused a second install; an
+#         app's companions (containers its own container made, NOTE-29)
+#         are listed with it, and stopped and removed with it (their
+#         volumes only with "delete data");
 #       - status from the Docker SDK: Running, Stopped or Error (exited with
 #         an error, restarting, unhealthy) per app, its ports and its web UI
 #         link; "Template update available" when the catalog's
@@ -31,6 +35,7 @@ import asyncio
 import base64
 import datetime
 import difflib
+import grp
 import os
 import re
 import secrets
@@ -53,6 +58,37 @@ from .system_service import default_route_ip
 DOCKER = "/usr/bin/docker"
 MAX_PORTS = 32
 MASK = "••••••••"
+SHARE_GROUP = "nimbus-smb"                       # the group every share's files belong to (NOTE-25)
+TIMEZONE_RE = re.compile(r"[A-Za-z0-9_+-]{1,32}(/[A-Za-z0-9_+-]{1,32}){0,2}")
+
+
+def host_timezone(timezone_file="/etc/timezone", localtime="/etc/localtime"):
+    """This computer's time zone name for the apps' TZ (Debian keeps it in
+    /etc/timezone; /etc/localtime links to the zone file); Etc/UTC if
+    neither says."""
+    try:
+        with open(timezone_file, encoding="utf-8") as f:
+            name = f.read().strip()
+        if TIMEZONE_RE.fullmatch(name):
+            return name
+    except OSError:
+        pass
+    try:
+        target = os.readlink(localtime)
+        name = target.split("zoneinfo/", 1)[1] if "zoneinfo/" in target else ""
+        if TIMEZONE_RE.fullmatch(name):
+            return name
+    except OSError:
+        pass
+    return "Etc/UTC"
+
+
+def share_gid():
+    """The gid of the shares' group, for apps that write into shares."""
+    try:
+        return grp.getgrnam(SHARE_GROUP).gr_gid
+    except KeyError:
+        return 0
 
 
 def _now():
@@ -98,11 +134,30 @@ class AppsService:
             raise ApiError(404, f"There is no installed app named '{name}'.", "name")
         return record
 
+    def companion_prefixes(self):
+        """{container name prefix: app name} for the installed apps whose
+        own container creates more containers (Nextcloud AIO, NOTE-29)."""
+        out = {}
+        for name, record in self.state.stacks().items():
+            entry = self.catalog.get(record["app"])
+            companions = entry and entry["manifest"]["companions"]
+            if companions and companions["containers"]:
+                out[companions["containers"]] = name
+        return out
+
     async def _containers(self):
         try:
-            return await asyncio.to_thread(self.docker.containers), None
+            return await asyncio.to_thread(self.docker.containers, tuple(self.companion_prefixes())), None
         except DockerUnavailable as exc:
             return None, str(exc)
+
+    def _check_single(self, app_id, manifest):
+        if not manifest["single_instance"]:
+            return
+        taken = [n for n, r in [*self.state.stacks().items(), *self.pending.items()] if r["app"] == app_id]
+        if taken:
+            raise ApiError(409, f"{manifest['name']} is already installed as '{taken[0]}', and it can be installed "
+                                "only once (it uses fixed container and volume names).", "app")
 
     async def used_ports(self, exclude=None):
         """{(protocol, port): owner} for everything that holds a host port."""
@@ -147,6 +202,7 @@ class AppsService:
 
     async def defaults(self, app_id, name=None):
         manifest = self._app(app_id)["manifest"]
+        self._check_single(app_id, manifest)
         name = V.stack_name(name) if name else self.unique_name(app_id)
         used = await self.used_ports()
         lan_ip = default_route_ip() or ""
@@ -291,7 +347,8 @@ class AppsService:
     def _build(self, entry, inputs):
         try:
             return compose.build(entry["manifest"], entry["template"], inputs,
-                                 host_ip=default_route_ip() or "", hostname=socket.gethostname())
+                                 host_ip=default_route_ip() or "", hostname=socket.gethostname(),
+                                 timezone=host_timezone(), share_gid=share_gid())
         except compose.ComposeError as exc:
             raise ApiError(422, exc.message, exc.field) from None
 
@@ -357,6 +414,7 @@ class AppsService:
 
     async def install(self, app_id, raw_inputs, raw_compose=None):
         entry = self._app(app_id)
+        self._check_single(app_id, entry["manifest"])
         inputs = await self.validate_inputs(entry["manifest"], raw_inputs)
         name = inputs["name"]
         text, doc = self._text_and_doc(entry, inputs, raw_compose, name)
@@ -409,14 +467,37 @@ class AppsService:
                 await job.run(self._compose(name, action), cwd=self.state.stack_dir(name))
         return self.jobs.start(action, name, work, messages[action])
 
+    async def _remove_companions(self, job, companions, delete_data):
+        """Stop (with time to close their databases) and remove what the
+        app's container created; its volumes only with DELETE_DATA."""
+        prefix = companions["containers"]
+        if prefix:
+            found = await asyncio.to_thread(self.docker.containers, (prefix,))
+            names = sorted(c["name"] for c in found if not c["project"] and c["name"].startswith(prefix))
+            if names:
+                await job.run([DOCKER, "stop", "--time", "60", *names])
+                await job.run([DOCKER, "rm", *names])
+        if companions["network"] and companions["network"] in await asyncio.to_thread(self.docker.networks):
+            await job.run([DOCKER, "network", "rm", companions["network"]])
+        if companions["volumes"]:
+            volumes = [v for v in await asyncio.to_thread(self.docker.volumes) if v.startswith(companions["volumes"])]
+            if volumes and delete_data:
+                await job.run([DOCKER, "volume", "rm", *volumes])
+            elif volumes:
+                job.log(f"Its data stays in the Docker volumes {', '.join(volumes)}.")
+
     async def uninstall(self, name, delete_data):
-        self._record(name)
+        record = self._record(name)
         stack_dir = self.state.stack_dir(name)
+        entry = self.catalog.get(record["app"])
+        companions = entry and entry["manifest"]["companions"]
 
         async def work(job):
             if os.path.exists(self.compose_file(name)):
                 await job.run(self._compose(name, "down", "--remove-orphans", *(["--volumes"] if delete_data else [])),
                               cwd=stack_dir)
+            if companions:
+                await self._remove_companions(job, companions, delete_data)
             if delete_data:
                 job.log(f"Deleting {stack_dir}")
                 await self.privd.call("stack.delete_data", {"stack": name}, timeout=600)
@@ -547,7 +628,7 @@ class AppsService:
         if port is None:
             return None
         host = "localhost" if webui["secure_context"] else socket.gethostname()
-        return f"http://{host}:{port}{webui['path']}"
+        return f"{webui.get('scheme', 'http')}://{host}:{port}{webui['path']}"
 
     async def list(self, containers=None, problem=None):
         """Every app with its status. CONTAINERS (and PROBLEM, when Docker
@@ -624,7 +705,7 @@ async def catalog(request: Request):
         installed.setdefault(record["app"], []).append(name)
     apps = [{"id": app_id, **{k: m[k] for k in ("name", "description", "category", "notes", "template_version")},
              "icon": f"/catalog-icons/{app_id}.svg" if e["icon"] else None, "installed_as": installed.get(app_id, []),
-             "webui": bool(m["webui"])}
+             "webui": bool(m["webui"]), "single_instance": m["single_instance"]}
             for app_id, e in sorted(s.catalog.apps().items(), key=lambda kv: kv[1]["manifest"]["name"].lower())
             for m in [e["manifest"]]]
     return {"apps": apps, "errors": s.catalog.errors}

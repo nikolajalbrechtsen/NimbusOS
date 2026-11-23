@@ -1,0 +1,10 @@
+{# catalog/grafana/docker-compose.yml.j2: Grafana (open source edition), as
+   in Grafana's Docker install guide: the grafana/grafana image, the web
+   page on 3000 and its data in /var/lib/grafana, which belongs to the
+   image's user 472 (manifest owner, docs/PLAN.md NOTE-31). The admin
+   comes from GF_SECURITY_ADMIN_USER and _PASSWORD (Grafana's GF_<section>_<key>
+   variables for [security] admin_user and admin_password).
+   The engine adds the ports, volumes, environment and restart policy. #}
+services:
+  grafana:
+    image: "docker.io/grafana/grafana:latest"

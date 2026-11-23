@@ -114,15 +114,20 @@ class FakeDocker:
     def __init__(self, containers=None, networks=("bridge", "host", "none", "proxy")):
         self.items = list(containers or [])
         self.network_names = list(networks)
+        self.volume_names = []
         self.available = True
 
     def _check(self):
         if not self.available:
             raise DockerUnavailable(UNAVAILABLE)
 
-    def containers(self):
+    def containers(self, prefixes=()):
         self._check()
-        return list(self.items)
+        return [c for c in self.items if c["project"] or any(c["name"].startswith(p) for p in prefixes)]
+
+    def volumes(self):
+        self._check()
+        return sorted(self.volume_names)
 
     def published_ports(self):
         return {(p["protocol"], p["host_port"]) for c in self.containers() for p in c["ports"]}

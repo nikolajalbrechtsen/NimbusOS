@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- catalog/syncthing/icon.svg: Syncthing's catalog icon, a monogram on the color of
+     its category (Files), not the vendor's logo (docs/PLAN.md NOTE-28). -->
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64" role="img" aria-label="Syncthing">
+  <rect width="64" height="64" rx="14" fill="#b39cff"/>
+  <text x="32" y="41" text-anchor="middle" font-family="Inter, 'DejaVu Sans', sans-serif" font-size="25" font-weight="700" letter-spacing="-0.5" fill="#06182a">St</text>
+</svg>

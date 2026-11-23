@@ -1,0 +1,19 @@
+{# catalog/nextcloud-aio/docker-compose.yml.j2: the Nextcloud AIO
+   mastercontainer, as in AIO's own compose.yaml: the latest image, the
+   fixed container name nextcloud-aio-mastercontainer and the fixed volume
+   name nextcloud_aio_mastercontainer (AIO's updates and backups depend on
+   both, so the app is single_instance), init, Docker's default bridge
+   network, and the Docker socket read-only (manifest host_paths). Only the
+   AIO interface (8080, HTTPS) is published: ports 80 and 8443 serve the
+   interface with a domain certificate and are optional (docs/PLAN.md
+   NOTE-29). The engine adds the ports, volumes, environment and restart
+   policy. #}
+services:
+  mastercontainer:
+    image: "ghcr.io/nextcloud-releases/all-in-one:latest"
+    container_name: "nextcloud-aio-mastercontainer"
+    init: true
+    network_mode: "bridge"
+volumes:
+  nextcloud_aio_mastercontainer:
+    name: "nextcloud_aio_mastercontainer"

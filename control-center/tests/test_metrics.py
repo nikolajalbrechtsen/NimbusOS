@@ -176,6 +176,9 @@ class FakeApps:
         self.calls += 1
         return {"apps": self.rows, "docker": {"ok": problem is None, "message": problem}}
 
+    def companion_prefixes(self):
+        return {"nextcloud-aio-": "cloud"}
+
 
 class FakeUpdates:
     async def status(self):
@@ -217,6 +220,29 @@ def test_tick_with_containers(tmp_path):
     assert latest["split"]["cpu"]["docker"] == pytest.approx(20.0) and latest["split"]["cpu"]["system"] == pytest.approx(5.0)
     assert "/containers/c3/stats?stream=1" not in requests and any(r.startswith("/events?filters=") for r in requests)
     assert latest["docker"] == {"ok": True, "message": None}
+
+
+def test_companions_count_as_their_app(tmp_path):
+    # Nextcloud AIO's mastercontainer (Compose project "cloud") starts
+    # nextcloud-aio-* containers itself, without Compose labels (NOTE-29).
+    async def main():
+        d = await FakeDockerd(tmp_path / "d.sock").start()
+        for cid in ("c1", "c2", "c3"):
+            d.stats[cid] = [docker_stats(total=1_400_000_000, system=18_000_000_000, pre_total=1_000_000_000,
+                                         pre_system=10_000_000_000, usage=100 * 2 ** 20)]
+        docker = FakeDocker([{**container("cloud", "mastercontainer"), "id": "c1", "name": "nextcloud-aio-mastercontainer"},
+                             {**container("", "x"), "id": "c2", "name": "nextcloud-aio-apache"},
+                             {**container("", "x"), "id": "c3", "name": "someone-else"}])
+        svc = collector(tmp_path, docker=docker)
+        await svc.tick()
+        await asyncio.sleep(0.2)
+        latest = await svc.tick()
+        await svc.stop()
+        await d.stop()
+        return latest, docker
+    latest, docker = asyncio.run(main())
+    assert latest["apps"] == {"cloud": {"cpu": pytest.approx(10.0), "memory": 200 * 2 ** 20, "containers": 2}}
+    assert latest["split"]["cpu"]["docker"] == pytest.approx(10.0)      # the unlabelled stranger isn't listed at all
 
 
 def test_vm_usage_and_history(tmp_path):

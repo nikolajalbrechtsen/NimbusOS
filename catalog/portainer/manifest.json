@@ -1,0 +1,19 @@
+{
+  "id": "portainer",
+  "name": "Portainer",
+  "description": "Manage Docker containers, images, volumes and networks from a web page.",
+  "category": "Management",
+  "template_version": 1,
+  "main_service": "portainer",
+  "ports": [
+    {"id": "https", "container": 9443, "host": 9443, "description": "Web page (HTTPS, self-signed certificate)"}
+  ],
+  "volumes": [
+    {"id": "data", "container": "/data", "default": "data", "description": "Portainer's settings and users"}
+  ],
+  "host_paths": [
+    {"host": "/var/run/docker.sock", "container": "/var/run/docker.sock"}
+  ],
+  "webui": {"port": "https", "path": "/", "scheme": "https"},
+  "notes": "Open it within 5 minutes of installing and create the admin user (at least 12 characters), as Portainer requires. It asks for a setup token: Logs shows it on the line with setup_token=. Your browser warns about Portainer's self-signed certificate the first time. Portainer has full control of Docker, including the apps installed here."
+}

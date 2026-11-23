@@ -1,0 +1,8 @@
+{# catalog/portainer/docker-compose.yml.j2: Portainer CE, as in Portainer's
+   Docker install guide: the lts image, the web page on 9443 over HTTPS, its
+   data in /data and the Docker socket (manifest host_paths). Port 8000 is
+   left out: Portainer needs it only for Edge agents.
+   The engine adds the ports, volumes, environment and restart policy. #}
+services:
+  portainer:
+    image: "docker.io/portainer/portainer-ce:lts"

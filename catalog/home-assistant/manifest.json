@@ -1,0 +1,20 @@
+{
+  "id": "home-assistant",
+  "name": "Home Assistant",
+  "description": "Home automation that keeps your devices and their data at home.",
+  "category": "Smart home",
+  "template_version": 1,
+  "main_service": "homeassistant",
+  "network_mode": "host",
+  "ports": [
+    {"id": "http", "container": 8123, "host": 8123, "description": "Web page"}
+  ],
+  "volumes": [
+    {"id": "config", "container": "/config", "default": "config", "description": "Configuration, history and automations"}
+  ],
+  "host_paths": [
+    {"host": "/run/dbus", "container": "/run/dbus", "read_only": true}
+  ],
+  "webui": {"port": "http", "path": "/"},
+  "notes": "It uses host networking, so it can find devices on your network and is reached on port 8123. On the first visit, create your user. Bluetooth works through this computer's D-Bus. A USB stick (Zigbee, Z-Wave) has to be added under devices in the Compose tab: NimbusOS doesn't run Home Assistant privileged, unlike its own example. This installation type has no add-ons."
+}

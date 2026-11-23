@@ -1,0 +1,21 @@
+{
+  "id": "pihole",
+  "name": "Pi-hole",
+  "description": "Block ads and trackers for every device on your network, at the DNS level.",
+  "category": "Network",
+  "template_version": 1,
+  "main_service": "pihole",
+  "ports": [
+    {"id": "dns_udp", "container": 53, "host": 53, "protocol": "udp", "bind": "lan", "fixed": true, "description": "DNS"},
+    {"id": "dns_tcp", "container": 53, "host": 53, "protocol": "tcp", "bind": "lan", "fixed": true, "description": "DNS"},
+    {"id": "web", "container": 80, "host": 8053, "description": "Admin page"}
+  ],
+  "volumes": [
+    {"id": "config", "container": "/etc/pihole", "default": "etc-pihole", "description": "Settings, block lists and query history"}
+  ],
+  "env": [
+    {"name": "FTLCONF_webserver_api_password", "required": true, "secret": true, "generate": "password", "description": "Password for the admin page"}
+  ],
+  "webui": {"port": "web", "path": "/admin/"},
+  "notes": "DNS answers on this computer's LAN address only, because the virtual machines' network already uses port 53 on its own address. Point your router's DNS setting (or each device's) to this computer's LAN address, and give this computer a fixed address in your router. The admin password is in Edit, under Environment. Pi-hole as a DHCP server needs host networking and the NET_ADMIN capability (Advanced, Compose)."
+}

@@ -1,0 +1,19 @@
+{
+  "id": "nginx-proxy-manager",
+  "name": "Nginx Proxy Manager",
+  "description": "Reach your apps at your own domain names over HTTPS, with free Let's Encrypt certificates.",
+  "category": "Network",
+  "template_version": 1,
+  "main_service": "nginx-proxy-manager",
+  "ports": [
+    {"id": "http", "container": 80, "host": 80, "fixed": true, "description": "Public HTTP"},
+    {"id": "https", "container": 443, "host": 443, "fixed": true, "description": "Public HTTPS"},
+    {"id": "admin", "container": 81, "host": 81, "description": "Admin page"}
+  ],
+  "volumes": [
+    {"id": "data", "container": "/data", "default": "data", "description": "Settings, proxy hosts and its database"},
+    {"id": "letsencrypt", "container": "/etc/letsencrypt", "default": "letsencrypt", "description": "Certificates"}
+  ],
+  "webui": {"port": "admin", "path": "/"},
+  "notes": "On the first visit, create the admin account. Ports 80 and 443 must be free on this computer, and forwarded from your router for Let's Encrypt. To give Vaultwarden or Home Assistant an https:// address, add a proxy host that points to this computer's LAN address and the app's port."
+}

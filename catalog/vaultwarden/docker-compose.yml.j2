@@ -1,0 +1,7 @@
+{# catalog/vaultwarden/docker-compose.yml.j2: Vaultwarden, as in its
+   Docker Compose guide: the latest image, the web vault on container port
+   80 and its data in /data. HTTPS comes from a reverse proxy (notes).
+   The engine adds the ports, volumes, environment and restart policy. #}
+services:
+  vaultwarden:
+    image: "docker.io/vaultwarden/server:latest"

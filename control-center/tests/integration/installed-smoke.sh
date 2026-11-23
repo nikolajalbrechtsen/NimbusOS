@@ -18,7 +18,10 @@
 #           "Check now" runs apt and reports the unreachable NimbusOS
 #           repository as a classified error, not as "no updates";
 #         - the Apps API answers without Docker running and without
-#           nimbus-catalog: an empty catalog, "Docker isn't running";
+#           nimbus-catalog: an empty catalog, "Docker isn't running"; then,
+#           with nimbus-catalog installed and no restart, its ten apps and
+#           their icons, and a 1-click plan with this computer's name and
+#           the nimbus-smb gid;
 #         - privd's stack verbs, called by the service user, hand a folder
 #           in /var/lib/nimbus-control/stacks to a container's uid and
 #           delete a stack folder holding files the service user can't touch;
@@ -69,6 +72,8 @@ trap finish EXIT
 pick() { find "$DEBS" -maxdepth 1 -name "$1_*.deb" -print -quit; }
 debs=("$(pick nimbus-control)" "$(pick nimbusos-release)" "$(pick nimbusos-archive-keyring)" "$(pick nimbusos-branding)")
 for d in "${debs[@]}"; do [[ -n "$d" ]] || { echo "installed-smoke: a .deb is missing in $DEBS" >&2; exit 2; }; done
+CATALOG_DEB="$(pick nimbus-catalog)"
+[[ -n "$CATALOG_DEB" ]] || { echo "installed-smoke: nimbus-catalog's .deb is missing in $DEBS" >&2; exit 2; }
 
 # Too large or not in Debian: empty stand-ins (they don't take part here).
 for p in docker-ce docker-ce-cli docker-compose-plugin chromium qemu-system-x86 ovmf swtpm-tools kdialog; do
@@ -129,6 +134,15 @@ check "the apps list says Docker isn't running, and doesn't fail" \
 	python3 -c 'import json,sys; s=json.loads(sys.argv[1]); assert s["apps"] == [] and not s["docker"]["ok"] and "systemctl start docker" in s["docker"]["message"]' "$apps"
 check "the catalog is empty without nimbus-catalog" \
 	python3 -c 'import json,sys; assert json.loads(sys.argv[1]) == {"apps": [], "errors": []}' "$(api http://127.0.0.1:7777/api/catalog)"
+dpkg -i "$CATALOG_DEB" >/dev/null
+check "with nimbus-catalog installed, the running service lists its ten apps" \
+	python3 -c 'import json,sys; s=json.loads(sys.argv[1]); assert len(s["apps"]) == 10 and s["errors"] == [] and all(a["icon"] for a in s["apps"])' \
+	"$(api http://127.0.0.1:7777/api/catalog)"
+check "a catalog icon is served" sh -c 'curl -fsS http://127.0.0.1:7777/catalog-icons/jellyfin.svg | grep -q "<svg"'
+check "a 1-click plan fills in this computer's name and the shares' group (Syncthing)" \
+	python3 -c 'import json,sys,yaml; s=yaml.safe_load(json.loads(sys.argv[1])["compose"])["services"]["syncthing"]; assert s["environment"]["PGID"] == sys.argv[2] and s["hostname"] == sys.argv[3], s' \
+	"$(api -X POST -H 'Content-Type: application/json' -d '{"app": "syncthing"}' http://127.0.0.1:7777/api/apps/plan)" \
+	"$(getent group nimbus-smb | cut -d: -f3)" "$(hostname)"
 
 echo "Virtual machines"
 for page in views/vms.js console.html console.js lib/vnc.js novnc/core/rfb.js; do

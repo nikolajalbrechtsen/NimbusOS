@@ -1,0 +1,19 @@
+{
+  "id": "vaultwarden",
+  "name": "Vaultwarden",
+  "description": "A password manager server that works with the Bitwarden apps and browser extensions.",
+  "category": "Passwords",
+  "template_version": 1,
+  "main_service": "vaultwarden",
+  "ports": [
+    {"id": "http", "container": 80, "host": 8222, "description": "Web vault and the apps' server address"}
+  ],
+  "volumes": [
+    {"id": "data", "container": "/data", "default": "data", "description": "The password database, attachments and keys"}
+  ],
+  "env": [
+    {"name": "SIGNUPS_ALLOWED", "default": "true", "description": "While true, anyone who can reach Vaultwarden may create an account. Set it to false once your accounts exist"}
+  ],
+  "webui": {"port": "http", "path": "/", "secure_context": true},
+  "notes": "The web vault only works in a secure context, so Open uses http://localhost on this computer. For phones and other computers, give it an https:// address with Nginx Proxy Manager and add the variable DOMAIN with that address (Edit). Create your accounts, then set SIGNUPS_ALLOWED to false."
+}

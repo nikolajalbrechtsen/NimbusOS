@@ -5,8 +5,8 @@
 #         - manifest.schema.json exists and is a valid JSON Schema;
 #         - there is at least one app; every app is a directory named like
 #           an app id (^[a-z0-9][a-z0-9-]{0,62}$) holding manifest.json,
-#           docker-compose.yml.j2 and icon.svg, and nothing that is a
-#           symbolic link;
+#           docker-compose.yml.j2 and icon.svg and nothing else (no extra
+#           files or folders), and nothing that is a symbolic link;
 #         - each manifest is a JSON object that passes the schema, has "id"
 #           equal to its directory name, and has "template_version", a whole
 #           number of at least 1 (not a string, not true/false).
@@ -79,6 +79,8 @@ def main(argv):
         for required in REQUIRED_FILES:
             if not os.path.isfile(os.path.join(path, required)):
                 problem(path, f"{required} is missing")
+        for extra in sorted(set(os.listdir(path)) - set(REQUIRED_FILES)):
+            problem(os.path.join(path, extra), "unexpected file (an app holds only " + ", ".join(REQUIRED_FILES) + ")")
 
         manifest_path = os.path.join(path, "manifest.json")
         try:

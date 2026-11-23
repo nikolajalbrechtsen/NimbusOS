@@ -4,7 +4,9 @@
 # What: - the fixture manifests parse, with every default filled in;
 #       - each kind of broken manifest is refused with the app and the field
 #         named (ids, template_version, ports, volume paths and owners,
-#         share_hint, env generators, host_paths, webui);
+#         share_hint, env generators, host_paths, webui); test_catalog.py
+#         checks the stricter rules (unknown keys, strings for booleans,
+#         webui.scheme, single_instance, companions) against the schema;
 #       - Catalog: loads the apps, lists broken ones in .errors without
 #         hiding the others, skips symbolic links, picks up a changed or
 #         removed app without a restart (NOTE-60), and applies
@@ -39,7 +41,7 @@ def test_fixture_manifests_parse_with_defaults():
     assert media["share_hint"] == "Media" and media["owner"] is None
     assert web["env"][1] == {"name": "ADMIN_PASSWORD", "default": None, "required": True, "secret": True,
                              "generate": "password", "description": "First login"}
-    assert web["webui"] == {"port": "http", "path": "/", "secure_context": False}
+    assert web["webui"] == {"port": "http", "path": "/", "scheme": "http", "secure_context": False}
     assert web["host_paths"] == []
 
     dns = parse_manifest(load("demo-dns"), "demo-dns")

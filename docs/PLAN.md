@@ -114,14 +114,15 @@ NimbusOS/
 │       ├── integration/vm-libvirt.sh                 a real libvirtd: VMs, firmware, TPM, websockify, live console shots
 │       ├── integration/nas-integration.sh            real mergerfs, SnapRAID, Samba, smbclient and iptables
 │       ├── integration/docker-streams.sh             a real dockerd: the events and stats streams the Dashboard reads
+│       ├── integration/catalog-images.sh             the catalog's images on their registries; real "docker compose config"
 │       └── integration/samba-ucf-keeps-include.sh   CI: a ucf-managed smb.conf update keeps the include (NOTE-23)
 │
 ├── catalog/
-│   ├── SCHEMA.md                     manifest schema, documented field by field
-│   ├── manifest.schema.json          the same schema as JSON Schema (checked in CI and at runtime)
+│   ├── SCHEMA.md                     manifest schema, documented field by field; templates; changing an app
+│   ├── manifest.schema.json          the same schema as JSON Schema (checked at package build and at runtime)
 │   └── <app-id>/{manifest.json, docker-compose.yml.j2, icon.svg}
 │        portainer, uptime-kuma, vaultwarden, nextcloud-aio, jellyfin,
-│        pihole, syncthing, home-assistant, grafana, nginx-proxy-manager
+│        pihole, syncthing, home-assistant, grafana, nginx-proxy-manager (NOTE-70)
 │
 ├── apt/                              repository config for gh-pages: stable + beta, last 3 versions, Valid-Until 14 d (NOTE-52)
 │
@@ -390,7 +391,7 @@ Because live-build only places keys at that fixed `trusted.gpg.d/<name>.asc` pat
 
 **NOTE-28 — Catalog icons.** Each app gets a neutral monogram SVG (initials on the app's category color), not the vendor's logo. This avoids trademark problems and binary files.
 
-**NOTE-29 — Nextcloud AIO and Vaultwarden are exceptions.** Nextcloud AIO requires the container name `nextcloud-aio-mastercontainer`, the named volume `nextcloud_aio_mastercontainer` (its data is not under the stack directory) and the Docker socket. It also starts its own `nextcloud-aio-*` containers, which the dashboard groups under the AIO app. Vaultwarden's web vault needs a secure context, so its manifest sets `webui.secure_context: true` and its Open link uses `http://localhost:<port>` instead of the hostname. For LAN access, the notes point to Nginx Proxy Manager with TLS.
+**NOTE-29 — Nextcloud AIO and Vaultwarden are exceptions.** Nextcloud AIO requires the container name `nextcloud-aio-mastercontainer`, the named volume `nextcloud_aio_mastercontainer` (its data is not under the stack directory) and the Docker socket. It also starts its own `nextcloud-aio-*` containers, which the dashboard groups under the AIO app. Vaultwarden's web vault needs a secure context, so its manifest sets `webui.secure_context: true` and its Open link uses `http://localhost:<port>` instead of the hostname. For LAN access, the notes point to Nginx Proxy Manager with TLS. (Deliverable 9 implements this with three manifest fields: `single_instance`, `companions` and `webui.scheme`; see NOTE-70.)
 
 **NOTE-30 — Compose templates and the raw editor.** Every value inserted into a `.j2` template goes through a JSON-quoting filter (`| q`) in a Jinja2 `SandboxedEnvironment` with `StrictUndefined`. That rules out YAML injection. In the raw editor, a bind mount must resolve inside the stack directory, inside a share, or to one of the host paths listed in the app's manifest (for example `/var/run/docker.sock` for Portainer and AIO, `/run/dbus` for Home Assistant). Anything else is rejected with a message that says which path broke the rule.
 
@@ -617,7 +618,7 @@ Until batch 5, the router shows a clear "could not be shown" state for a page wh
 - **Spec settings carried to batch 4:** the spec also lists `smb encrypt = if_required` and global `vfs objects = catia fruit streams_xattr`. They interact with per-share VFS modules (recycle bin, Time Machine), so batch 4 adds them to `nimbus.conf` together with the share renderer and checks them with `testparm`.
 
 **NOTE-66 — Control Center, batch 2 of 5: Apps.** The Apps page has an Installed list, the Catalog, 1-click install and Advanced install with a Compose tab. The backend is `manifest.py`, `catalog.py`, `compose.py`, `apps_service.py`, `jobs.py`, `docker_api.py` and `state.py`, plus privd's `stacks.py`. No new lines in `debian/install` were needed: everything sits in folders batch 1 already installs.
-- **The manifest contract (for deliverable 9).** `manifest.py` defines what an app may declare:
+- **The manifest contract (for deliverable 9, which added `webui.scheme`, `single_instance`, `companions` and stricter checks: NOTE-70).** `manifest.py` defines what an app may declare:
   - `id` (equal to its folder), `name`, `description`, `category`, `template_version` ≥ 1 and `main_service`;
   - `network_mode` (`bridge` or `host`);
   - `ports[]`: `id`, `container`, `host`, `protocol`, `bind` (`all` or `lan`), `fixed`;
@@ -798,6 +799,49 @@ Until batch 5, the router shows a clear "could not be shown" state for a page wh
   - `docker-streams.sh` checks the protocol against a real Docker 29.10: events, the stats stream, its fields, and Docker's error message.
   - The CPU and memory formulas are checked with fixtures shaped like Docker's documents.
   - Real numbers are compared with `docker stats` and `virsh domstats` in deliverable 11's QEMU test.
+
+### Found while writing the catalog (deliverable 9)
+
+**NOTE-70 — The app catalog.** The ten apps the spec names, each a folder in `catalog/` with `manifest.json`, `docker-compose.yml.j2` and `icon.svg`. `catalog/SCHEMA.md` documents the format field by field, and `catalog/manifest.schema.json` (JSON Schema 2020-12) checks it. Every setting comes from the vendor's own install guide or README (read 2026-11-23), or from the image itself: `skopeo inspect` gives its user, exposed ports, volumes and environment.
+
+| App | Image | 1-click install | Quirk handled |
+|---|---|---|---|
+| Portainer | `docker.io/portainer/portainer-ce:lts` | 9443 (HTTPS), `/data`, the Docker socket | Notes: the setup token is in its log (`setup_token=`), and the admin must be created within 5 minutes. Port 8000 is left out (Edge agents only). |
+| Uptime Kuma | `docker.io/louislam/uptime-kuma:2` | 3001, `/app/data` | Notes: no network file systems. |
+| Vaultwarden | `docker.io/vaultwarden/server:latest` | 8222 → 80, `/data`, `SIGNUPS_ALLOWED` | Secure context: Open uses `localhost` (NOTE-29). No `DOMAIN` variable by default: the notes say to add it with a proxy. |
+| Nextcloud AIO | `ghcr.io/nextcloud-releases/all-in-one:latest` | 8080 (HTTPS), the named volume, the socket read-only | AIO's fixed container and volume names, `init`, Docker's default bridge; single instance; companions (below). Notes: Nextcloud needs a domain and port 443. |
+| Jellyfin | `docker.io/jellyfin/jellyfin:latest` | 8096, 7359/udp (discovery), `/config`, `/cache`, `/media` → the `media` share | Notes: DLNA needs host networking. |
+| Pi-hole | `docker.io/pihole/pihole:latest` | 53/tcp+udp on the LAN address (fixed), 8053 → 80 (`/admin/`), `/etc/pihole`, a generated admin password | NOTE-18; `FTLCONF_dns_listeningMode: ALL` (its README, for bridge networks); no extra capabilities (only DHCP and NTP need them). |
+| Syncthing | `docker.io/syncthing/syncthing:latest` | 8384, 22000/tcp+udp (fixed), config in the app's folder, `/var/syncthing/Sync` → the `backups` share | Runs as uid 1000 with the `nimbus-smb` group and umask 002, so SMB users can change what it syncs. |
+| Home Assistant | `ghcr.io/home-assistant/home-assistant:stable` | host network, 8123, `/config`, `/run/dbus` read-only, TZ, 60 s to stop | Not privileged (below). |
+| Grafana | `docker.io/grafana/grafana:latest` | 3000, `/var/lib/grafana` for its user 472, a generated admin password | Notes: Grafana sets the password on first start only ("Set once on first-run"). |
+| Nginx Proxy Manager | `docker.io/jc21/nginx-proxy-manager:latest` | 80 and 443 (fixed), 81 (admin), `/data`, `/etc/letsencrypt`, TZ | Its first-run page creates the admin. |
+
+- **Image tags** are each vendor's channel tag from its install guide (`lts`, `2`, `stable`, `latest`), so Update (pull and recreate) brings the vendor's current release. A template change still raises `template_version` (NOTE-60).
+  - Nginx Proxy Manager's guide pins one release (2.17.1) while its README uses `latest`; the catalog follows the README.
+  - Grafana's guide lists Enterprise as its default edition; the catalog uses the open-source image, `grafana/grafana`.
+  - `catalog-images.sh` checks that every image and tag exists for linux/amd64.
+- **Contract additions** (`manifest.py`, the schema and `SCHEMA.md`):
+  - `webui.scheme` (`http` or `https`): Portainer and the AIO interface serve HTTPS with their own certificates. The Open link was always `http://` before.
+  - `single_instance`: AIO's fixed names allow one install. A second plan or install is refused (409), and the Catalog card says "one per computer".
+  - `companions` (`containers`, `volumes`, `network`). This implements NOTE-29, which nothing had done yet: AIO's own containers carry no Compose label, so Docker's listing never showed them.
+    - `docker_api.containers(prefixes)` now also lists unlabelled containers by name prefix.
+    - The Dashboard counts them with their app. The app's status ignores them, because AIO stops them itself for its backups.
+    - Uninstall gives them 60 seconds to stop (`docker stop --time 60`; they hold databases), removes them and the `nextcloud-aio` network. Their volumes are removed only with "Delete data"; otherwise the log lists them. This follows AIO's own reset instructions.
+  - Templates also see `timezone` (from `/etc/timezone` or `/etc/localtime`, else `Etc/UTC`) and `share_gid` (the `nimbus-smb` gid).
+  - The engine keeps a template's `network_mode: "bridge"` (Docker's default bridge, as in AIO's compose.yaml). It drops `hostname` in host mode, because Docker refuses the two together.
+  - Stricter parsing, so the schema and the parser agree: unknown keys, booleans written as strings, explicit `null`s where the schema has none, and host paths with `:` or `..` are all errors. `test_catalog.py` gives 82 manifests to both and expects the same verdict. It also checks the 6 things only the parser can (`id` equals the folder, unique ids, `webui.port` names a port, `3.0` as a version).
+  - `check-catalog.py` also refuses anything in an app folder besides its three files.
+- **Deviations and choices:**
+  - The spec lists `icon` as a manifest field. The icon is the file `icon.svg` next to the manifest (NOTE-28), so the manifest has no `icon` key. The monograms use the UI's own colors with dark ink: Management blue, Monitoring green, Passwords amber, Files violet, Media coral, Network cyan, Smart home lime.
+  - **Home Assistant isn't privileged.** Its guide sets `privileged: true` without saying what for, and that would give the container every device on the computer. The notes say to add a USB stick under `devices` in the Compose tab. TZ replaces mounting `/etc/localtime`.
+  - **Syncthing runs on a bridge network.** Its README recommends host networking for local discovery, but published ports keep the 1-click port check working; the notes say to choose Host for local discovery.
+    - The share is mounted at `/var/syncthing/Sync`, not as `/var/syncthing`, because the entrypoint chowns `$HOME` and would take the share's folder from `root:nimbus-smb`.
+    - Syncthing v2 has no option to skip its default folder (checked in its source), so the share is where that folder lives.
+  - **AIO publishes only 8080.** Ports 80 and 8443 serve the interface with a domain certificate and are optional, so AIO doesn't take port 80 from Nginx Proxy Manager. Pi-hole's page is on 8053 for the same reason.
+  - **No `INITIAL_ADMIN_*` variables for Nginx Proxy Manager:** its `setup.js` logs that password in plain text.
+  - Uptime Kuma gets no Docker socket: its README doesn't use one.
+- **What couldn't run here.** No container can start in the dev container (NOTE-69), so installs are tested against the fake `docker` program, and `docker compose config` runs for real. Deliverable 11's QEMU test installs Jellyfin on the `media` share (the spec's step 3).
 
 ### Found by the Trixie archive check (deliverable 3)
 
@@ -1116,6 +1160,23 @@ How to read it: the NimbusOS and Docker repositories offer `bash` 99.0 and 98.0,
   - Quick open's tile letters were lowercase;
   - Fix had nothing to highlight in the preview, so the preview now holds the failing app's port.
 
+**Deliverable 9** (the app catalog, 2026-11-23, `dev-shell.sh`, NOTE-70):
+- **pytest, 531 passed** (99 new). 21 are skipped: the 11 as before, and 10 that need Docker's CLI, which `catalog-images.sh` runs.
+  - `test_catalog` (97): the ten apps load with no errors and pass the schema and the parser; the schema and the parser agree on 82 manifests, and the parser catches the 6 things a schema can't; templates quote every value and use the documented images; icons are plain SVG; the default host ports don't collide.
+  - Through the API with the fake `docker` program, `test_catalog` also covers:
+    - every app's 1-click plan;
+    - the spec's quirks (AIO, Home Assistant, Pi-hole, Jellyfin, Syncthing);
+    - all ten installed side by side;
+    - AIO refused a second time, its companions, and uninstall with and without "Delete data".
+  - `test_compose` (1): Docker's default bridge, `hostname` in host mode, `timezone` and `share_gid`. `test_metrics` (1): companions count with their app.
+- **`catalog-images.sh`, 11 passed** (throwaway container, skopeo 1.18.0, Docker CLI 29.10.0, Compose v5.8.0):
+  - All ten images exist for linux/amd64. Version labels: Home Assistant 2026.11.2, Jellyfin 12.4, Pi-hole 2026.11.0, Syncthing v2.1.7, Vaultwarden 1.37.5. The other five carry none; they were built 2026-11-10 to 2026-11-19.
+  - The real `docker compose config` accepts every app's 1-click file and the fixture apps (14 checks).
+- **`installed-smoke.sh`, 49 passed** (3 new): installing `nimbus-catalog` next to the running service lists its ten apps with no restart; an icon is served; a 1-click plan on the installed system has its hostname and the real `nimbus-smb` gid.
+- **`catalog.test.sh`, 32 passed** (2 new): the real catalog passes `check-catalog.py`, and a stray file inside an app is refused.
+- **Packages:** `nimbus-catalog` builds from `catalog/` ("10 app(s) OK") and is lintian-clean, as is `nimbus-control`. The maintainer-script test passes 82 of 82.
+- **Screenshots looked at:** the Catalog tab with the ten apps (monograms on their category colors), and Advanced install for Pi-hole: its DNS ports on the LAN address, the fixed-port warning when port 53 is taken, and its notes.
+
 **os-release, unattended-upgrades, Docker and Calamares** (`os-identity.test.sh`, NimbusOS os-release installed). Excerpts:
 
 ```
@@ -1171,7 +1232,7 @@ Facts confirmed by reading live-build `1:20250505+deb13u1`'s own scripts and Deb
 | 6 | Live hooks (done) | `build/config/hooks/live/{0100,0200,0300,0900}-*.hook.chroot`, `nimbus_check_image_initrd` in `build/lib/common.sh` (instead of a hook 9990, NOTE-62), `tools/tests/{hooks,image-initrd-check}.test.sh` |
 | 7 | Live-only files and boot menus (done) | `build/config/includes.chroot_after_packages/**`, `build/config/bootloaders/**`, hook `0400-live-manifest`, the verify hook's installer checks, `--bootappend-live-failsafe` and `nimbus_prepare_grub_theme` in `build/lib/common.sh`, `tools/tests/{live-files,bootloaders}.test.sh` (NOTE-63, NOTE-64) |
 | 8 | Nimbus Control Center, in five batches (done, NOTE-65) | **Batch 1 (done):** backend core (app, auth, errors, config, fonts, privd client, system, updates), `nimbus_common` (validate, protocol), privd (server, registry, runner, audit, updates, system), launcher and Grant access, desktop file and polkit action, the whole design system (`style.css`, `lib/{api,ui,icons}.js`, `app.js`), `views/updates.js`, tests. **Batch 2 (done, NOTE-66):** `backend/nimbus_control/{manifest,catalog,compose,apps_service,jobs,docker_api,state}.py`, privd `stacks.py`, the validators for apps, form components in `lib/ui.js`, `views/apps.js`, the fixture catalog and `test_{manifest,compose,apps}.py`, privd stack tests, Apps checks in `installed-smoke.sh`, Apps scenes in `ui_preview.py`. **Batch 3 (done, NOTE-67):** `backend/nimbus_control/{libvirt_api,vm_xml,vm_service,iso_library}.py`, the VM validators and settings, `views/vms.js`, `lib/vnc.js`, `console.{html,js}`, the CSP for websockify, `test_{vm_xml,isos,vms,vm_libvirt}.py`, `tests/integration/vm-libvirt.sh`, VM checks in `installed-smoke.sh`, VM scenes and `--live-vm` in `ui_preview.py`. **Batch 4 (done, NOTE-68):** privd `storage.py`, `samba.py`, `fsutil.py`, `nimbus_common/shares.py`, `backend/nimbus_control/{storage_service,shares_service}.py`, settings in `state.py`, `views/{storage,settings}.js`, `bin/{nimbus-netfix,nimbus-snapraid-run,nimbus-recycle-clean}`, the Samba drop-in's new sections, `test_{storage_privd,samba_privd,nas_api,nas_scripts}.py`, `tests/integration/nas-integration.sh`, NAS checks in `installed-smoke.sh`, storage scenes in `ui_preview.py`. **Batch 5 (done, NOTE-69):** `backend/nimbus_control/{metrics_service,docker_stream,alerts}.py`, `apps_service.diagnose`, libvirt's statistics call and state mapping, unprotected bytes in privd `storage.py`, `views/dashboard.js`, `lib/charts.js`, the console dialog in `lib/vnc.js`, navigation intents in `app.js`, `test_{metrics,alerts}.py`, `tests/integration/docker-streams.sh`, Dashboard checks in `installed-smoke.sh`, `vm-libvirt.sh` and `nas-integration.sh`, Dashboard scenes in `ui_preview.py`. Each batch adds its lines to `packages/nimbus-control/debian/install` (NOTE-61) |
-| 9 | Catalog | `catalog/SCHEMA.md`, `catalog/manifest.schema.json` (with `template_version`, NOTE-60), 10 apps |
+| 9 | Catalog (done, NOTE-70) | `catalog/SCHEMA.md`, `catalog/manifest.schema.json` (with `template_version`, NOTE-60), the 10 apps; `webui.scheme`, `single_instance` and `companions` in `manifest.py`, `apps_service.py`, `docker_api.py`, `metrics_service.py` and the Catalog card; `timezone` and `share_gid` for templates; `check-catalog.py` refuses extra files; `test_catalog.py`, `tests/integration/catalog-images.sh`, catalog checks in `installed-smoke.sh` and `catalog.test.sh`, the real catalog in `ui_preview.py` |
 | 10 | CI/CD and docs (CI also runs `tools/tests/*.test.sh` and `tools/fetch-docker-key.sh --verify-local` / `--check`) | `.github/workflows/*`, `.github/dependabot.yml`, `apt/conf/*`, `tools/{publish-apt.sh,releases-json.py,split-iso.sh,pin-actions.sh}`, `control-center/tests/integration/samba-ucf-keeps-include.sh`, `README.md`, `LICENSE`, `LICENSES/*`, `.shellcheckrc`, `ruff.toml`, `docs/{RELEASING,SIGNING}.md`, `docs/release-notes/v0.1.0.md` |
 | 11 | Testing (the smoke test includes `systemctl --user show-environment \| grep XDG_CONFIG_DIRS` and kinfocenter's About page after a graphical login, NOTE-55; the Dashboard's Docker and VM numbers against `docker stats` and `virsh domstats`, and SnapRAID move lines on real disks, NOTE-69) | `docs/TESTING.md`, `tools/qemu-test.sh` |
 

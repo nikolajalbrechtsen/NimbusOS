@@ -1,0 +1,20 @@
+{
+  "id": "grafana",
+  "name": "Grafana",
+  "description": "Dashboards and graphs for metrics and logs from many data sources.",
+  "category": "Monitoring",
+  "template_version": 1,
+  "main_service": "grafana",
+  "ports": [
+    {"id": "http", "container": 3000, "host": 3000, "description": "Web page"}
+  ],
+  "volumes": [
+    {"id": "data", "container": "/var/lib/grafana", "default": "data", "owner": {"uid": 472}, "description": "Dashboards, users and settings"}
+  ],
+  "env": [
+    {"name": "GF_SECURITY_ADMIN_USER", "default": "admin", "description": "The admin's user name"},
+    {"name": "GF_SECURITY_ADMIN_PASSWORD", "required": true, "secret": true, "generate": "password", "description": "The admin's password"}
+  ],
+  "webui": {"port": "http", "path": "/"},
+  "notes": "Sign in as admin with the generated password: Edit shows it under Environment. Grafana sets that password only when it starts for the first time; change it in Grafana after that."
+}

@@ -1,0 +1,16 @@
+{
+  "id": "uptime-kuma",
+  "name": "Uptime Kuma",
+  "description": "Watch websites, servers and services, and get a notification when one goes down.",
+  "category": "Monitoring",
+  "template_version": 1,
+  "main_service": "uptime-kuma",
+  "ports": [
+    {"id": "http", "container": 3001, "host": 3001, "description": "Web page"}
+  ],
+  "volumes": [
+    {"id": "data", "container": "/app/data", "default": "data", "description": "Monitors, history and settings"}
+  ],
+  "webui": {"port": "http", "path": "/"},
+  "notes": "On the first visit, create the admin account. Keep its data folder on this computer's own disk: Uptime Kuma doesn't support network file systems such as NFS."
+}

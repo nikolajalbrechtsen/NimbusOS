@@ -3,13 +3,14 @@
 # packages/nimbus-catalog/tests/catalog.test.sh
 # =============================================================================
 # What: tests the nimbus-catalog packaging with a small test catalog (two
-#       apps and a minimal schema, written by this script; the real catalog
-#       and schema are deliverable 9):
-#         1. debian/check-catalog.py accepts a good catalog and rejects, each
-#            with its own message: a missing, string, boolean or zero
-#            template_version; an id that doesn't match its directory; a
-#            missing compose template; a symbolic link; a schema violation;
-#            a stray file; a bad directory name; a missing schema; no apps.
+#       apps and a minimal schema, written by this script):
+#         1. debian/check-catalog.py accepts a good catalog and the real one
+#            (catalog/, its ten apps), and rejects, each with its own
+#            message: a missing, string, boolean or zero template_version;
+#            an id that doesn't match its directory; a missing compose
+#            template; a symbolic link; a schema violation; a stray file
+#            next to the apps and one inside an app; a bad directory name;
+#            a missing schema; no apps.
 #         2. The package builds (debian/rules runs the check) and installs the
 #            apps under /usr/share/nimbus-control/catalog/; it has no
 #            maintainer scripts at all.
@@ -103,6 +104,7 @@ make_catalog "$WORK/good" 1 "grafana/grafana:11.3.0"
 
 echo "check-catalog.py"
 check "a good catalog passes (2 apps)" sh -c '"$@" | grep -q "2 app(s) OK"' _ "${CHECK[@]}" "$WORK/good"
+check "the real catalog passes (10 apps)" sh -c '"$@" | grep -q "10 app(s) OK"' _ "${CHECK[@]}" "$ROOT/catalog"
 v="$(variant no-version)"; set_field "$v/grafana/manifest.json" template_version delete
 check "missing template_version" rejects "$v" 'grafana/manifest.json: "template_version" must be a whole number of at least 1, got None'
 v="$(variant string-version)"; set_field "$v/grafana/manifest.json" template_version '"2"'
@@ -121,6 +123,8 @@ v="$(variant schema)"; set_field "$v/grafana/manifest.json" name delete
 check "schema violation" rejects "$v" "schema: (top level): 'name' is a required property"
 v="$(variant stray)"; echo hi >"$v/README.txt"
 check "stray file next to the apps" rejects "$v" "README.txt: unexpected entry"
+v="$(variant stray-in-app)"; echo hi >"$v/grafana/notes.txt"
+check "stray file inside an app" rejects "$v" "grafana/notes.txt: unexpected file"
 v="$(variant bad-name)"; mv "$v/grafana" "$v/Grafana_App"
 check "invalid app directory name" rejects "$v" "Grafana_App: directory name is not a valid app id"
 v="$(variant no-schema)"; rm "$v/manifest.schema.json"

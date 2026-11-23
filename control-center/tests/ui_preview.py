@@ -8,17 +8,18 @@
 #       stopped; one with a template update; the failing one's host port held
 #       by a listener here, for the Dashboard's Fix) with a FakeDockerd thread
 #       streaming their stats, PreviewHost (an hour of gently drifting
-#       history), the fixture catalog, and a
-#       FakeLibvirt with four VMs (running Linux with usage, paused on a disk
-#       error, stopped Windows that starts with the computer, one made by
-#       another tool) and three ISOs:
+#       history), the real catalog (catalog/) with the fixture apps added,
+#       and a FakeLibvirt with four VMs (running Linux with usage, paused on
+#       a disk error, stopped Windows that starts with the computer, one made
+#       by another tool) and three ISOs:
 #         - each page given on the command line at 1400x900, at full height
 #           (1400x1800) and at 800 px (the narrow layout);
 #         - "scenes": a page plus buttons and labels to press, in order (by
 #           their text or, for icon buttons, their label; "@N" for the Nth
 #           match, a trailing "*" for "starts with"): the Apps catalog,
-#           Advanced install, its Compose tab, the template diff; the ISO
-#           library, Create VM (Linux and Windows), VM options, deleting a VM;
+#           Advanced install (a fixture app, and Pi-hole), its Compose tab,
+#           the template diff; the ISO library, Create VM (Linux and
+#           Windows), VM options, deleting a VM;
 #           the Disks, Pool and Users tabs, a share's editor, formatting a
 #           disk, and the NAS wizard on a NAS not set up yet (PreviewNas: a
 #           pool with parity, a disk with bad sectors, a sleeping one);
@@ -81,6 +82,7 @@ SCENES = {
     "apps-catalog": ("apps", ["Catalog"]),
     "apps-advanced": ("apps", ["Catalog", "Advanced…@2"]),
     "apps-compose": ("apps", ["Catalog", "Advanced…@2", "Compose file"]),
+    "apps-advanced-pihole": ("apps", ["Catalog", "Advanced…@8"]),
     "apps-template": ("apps", ["Template update"]),
     "vms-isos": ("vms", ["ISO library"]),
     "vms-create": ("vms", ["Create VM"]),
@@ -113,6 +115,16 @@ async function press(spec) {
 
 
 # --- made-up data ----------------------------------------------------------------------------
+def merged_catalog(tmp):
+    """The real catalog (catalog/, deliverable 9) plus the fixture apps the
+    made-up installed apps come from."""
+    catalog = tmp / "catalog"
+    shutil.copytree(CC.parent / "catalog", catalog)
+    for app in FIXTURE_CATALOG.iterdir():
+        shutil.copytree(app, catalog / app.name)
+    return catalog
+
+
 def build_state(tmp, catalog_dir):
     """Four installed demo apps, their Compose files, and two shares."""
     state = tmp / "state"
@@ -394,12 +406,13 @@ def start_dockerd(path, docker):
 def preview(out, pages):
     tmp = pathlib.Path(tempfile.mkdtemp())
     www = prepare_www(tmp)
-    state, docker = build_state(tmp, FIXTURE_CATALOG)
+    catalog = merged_catalog(tmp)
+    state, docker = build_state(tmp, catalog)
     isos, lv = build_vms(tmp)
     nas, specs = build_nas(tmp, state)
     (tmp / "tokens").mkdir()
     settings = Settings(run_dir=str(tmp), www_dir=str(www), os_release=str(tmp / "os-release"), state_dir=str(state),
-                        catalog_dir=str(FIXTURE_CATALOG), logo_path=str(CC.parent / "packages/nimbusos-branding/art/logo.svg"),
+                        catalog_dir=str(catalog), logo_path=str(CC.parent / "packages/nimbusos-branding/art/logo.svg"),
                         isos_dir=str(isos), vnc_tokens_dir=str(tmp / "tokens"), docker_socket=str(tmp / "docker.sock"))
     privd = FakePrivd({"update.history": HISTORY})
     nas.install(privd)

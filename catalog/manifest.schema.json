@@ -1,0 +1,134 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "NimbusOS catalog app manifest",
+  "description": "catalog/manifest.schema.json: the manifest.json of one catalog app (catalog/<id>/). Documented field by field in catalog/SCHEMA.md. The Control Center's parser (control-center/backend/nimbus_control/manifest.py) accepts exactly the manifests this schema accepts, and additionally checks what a schema can't: id equals the folder name, port and volume ids are unique, and webui.port names one of the ports (tests/test_catalog.py). Checked at package build (packages/nimbus-catalog/debian/check-catalog.py) and when the Control Center loads the catalog.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["id", "name", "description", "category", "template_version", "main_service"],
+  "properties": {
+    "id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9-]{0,62}$"},
+    "name": {"$ref": "#/$defs/text"},
+    "description": {"$ref": "#/$defs/text"},
+    "category": {"$ref": "#/$defs/text"},
+    "template_version": {"type": "integer", "minimum": 1, "maximum": 1000000},
+    "main_service": {"type": "string", "pattern": "^[a-z0-9][a-z0-9_-]{0,62}$"},
+    "network_mode": {"enum": ["bridge", "host"]},
+    "ports": {"type": "array", "items": {"$ref": "#/$defs/port"}},
+    "volumes": {"type": "array", "items": {"$ref": "#/$defs/volume"}},
+    "env": {"type": "array", "items": {"$ref": "#/$defs/env"}},
+    "host_paths": {"type": "array", "items": {"$ref": "#/$defs/host_path"}},
+    "webui": {
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "required": ["port"],
+      "properties": {
+        "port": {"$ref": "#/$defs/key"},
+        "path": {"type": "string", "pattern": "^/[^\\s?#]*$"},
+        "scheme": {"enum": ["http", "https"]},
+        "secure_context": {"type": "boolean"}
+      }
+    },
+    "single_instance": {"type": "boolean"},
+    "companions": {
+      "type": "object",
+      "additionalProperties": false,
+      "minProperties": 1,
+      "properties": {
+        "containers": {"$ref": "#/$defs/prefix"},
+        "volumes": {"$ref": "#/$defs/prefix"},
+        "network": {"$ref": "#/$defs/docker_name"}
+      }
+    },
+    "notes": {"type": "string"}
+  },
+  "$defs": {
+    "text": {"type": "string", "pattern": "\\S"},
+    "key": {"type": "string", "pattern": "^[a-z][a-z0-9_]{0,31}$"},
+    "port_number": {"type": "integer", "minimum": 1, "maximum": 65535},
+    "id_number": {"type": "integer", "minimum": 0, "maximum": 65534},
+    "docker_name": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,62}$"},
+    "prefix": {"type": "string", "pattern": "^[a-z0-9][a-z0-9_.-]{2,62}[-_]$"},
+    "absolute_path": {
+      "type": "string",
+      "pattern": "^/[^\\u0000:\\n]{0,255}$",
+      "not": {"pattern": "(^|/)\\.\\.(/|$)"}
+    },
+    "relative_path": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+){0,7}$",
+      "not": {"pattern": "(^|/)\\.\\.?(/|$)"}
+    },
+    "share_name": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$",
+      "not": {"pattern": "^([Gg][Ll][Oo][Bb][Aa][Ll]|[Hh][Oo][Mm][Ee][Ss]|[Pp][Rr][Ii][Nn][Tt][Ee][Rr][Ss])$"}
+    },
+    "port": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "container"],
+      "properties": {
+        "id": {"$ref": "#/$defs/key"},
+        "container": {"$ref": "#/$defs/port_number"},
+        "host": {"$ref": "#/$defs/port_number"},
+        "protocol": {"enum": ["tcp", "udp"]},
+        "bind": {"enum": ["all", "lan"]},
+        "fixed": {"type": "boolean"},
+        "description": {"type": "string"}
+      }
+    },
+    "volume": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "container"],
+      "properties": {
+        "id": {"$ref": "#/$defs/key"},
+        "container": {"$ref": "#/$defs/absolute_path"},
+        "kind": {"enum": ["bind", "named"]},
+        "default": {"type": "string"},
+        "share_hint": {"$ref": "#/$defs/share_name"},
+        "owner": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["uid"],
+          "properties": {"uid": {"$ref": "#/$defs/id_number"}, "gid": {"$ref": "#/$defs/id_number"}}
+        },
+        "description": {"type": "string"}
+      },
+      "if": {"required": ["kind"], "properties": {"kind": {"const": "named"}}},
+      "then": {
+        "required": ["default"],
+        "properties": {"default": {"$ref": "#/$defs/docker_name"}},
+        "not": {"required": ["share_hint"]}
+      },
+      "else": {
+        "properties": {"default": {"$ref": "#/$defs/relative_path"}},
+        "if": {"not": {"required": ["default"]}},
+        "then": {"properties": {"id": {"$ref": "#/$defs/relative_path"}}}
+      }
+    },
+    "env": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name"],
+      "properties": {
+        "name": {"type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,63}$"},
+        "default": {"type": ["string", "null"]},
+        "required": {"type": "boolean"},
+        "secret": {"type": "boolean"},
+        "generate": {"enum": ["password", "hex", "base64", null]},
+        "description": {"type": "string"}
+      }
+    },
+    "host_path": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["host", "container"],
+      "properties": {
+        "host": {"$ref": "#/$defs/absolute_path"},
+        "container": {"$ref": "#/$defs/absolute_path"},
+        "read_only": {"type": "boolean"}
+      }
+    }
+  }
+}

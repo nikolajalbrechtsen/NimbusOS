@@ -120,7 +120,7 @@ def test_catalog_and_public_icons(w):
     web = apps[2]
     assert web == {"id": "demo-web", "name": "Demo Web", "description": web["description"], "category": "Media",
                    "notes": "Test fixture for control-center/tests; never packaged.", "template_version": 2,
-                   "icon": "/catalog-icons/demo-web.svg", "installed_as": [], "webui": True}
+                   "icon": "/catalog-icons/demo-web.svg", "installed_as": [], "webui": True, "single_instance": False}
     assert apps[1]["icon"] is None
     icon = w.client.get("/catalog-icons/demo-web.svg")          # no token: an <img> can't send one
     assert icon.status_code == 200 and icon.headers["content-type"].startswith("image/svg+xml") and b"<svg" in icon.content

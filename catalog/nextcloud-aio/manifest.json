@@ -1,0 +1,21 @@
+{
+  "id": "nextcloud-aio",
+  "name": "Nextcloud All-in-One",
+  "description": "Your own cloud for files, calendars and contacts, with office documents, video calls and backups built in.",
+  "category": "Files",
+  "template_version": 1,
+  "main_service": "mastercontainer",
+  "ports": [
+    {"id": "interface", "container": 8080, "host": 8080, "description": "AIO interface (HTTPS, self-signed certificate)"}
+  ],
+  "volumes": [
+    {"id": "config", "container": "/mnt/docker-aio-config", "kind": "named", "default": "nextcloud_aio_mastercontainer", "description": "AIO's own settings; its backups need exactly this volume name"}
+  ],
+  "host_paths": [
+    {"host": "/var/run/docker.sock", "container": "/var/run/docker.sock", "read_only": true}
+  ],
+  "webui": {"port": "interface", "path": "/", "scheme": "https"},
+  "single_instance": true,
+  "companions": {"containers": "nextcloud-aio-", "volumes": "nextcloud_aio_", "network": "nextcloud-aio"},
+  "notes": "Nextcloud is set up from the AIO interface: open it, accept its self-signed certificate, write down the passphrase it shows, and follow its steps. Nextcloud itself needs a domain name that points to this computer, with port 443 (and 3478 for Talk) reachable from the internet; AIO supports neither IP addresses nor self-signed certificates for it. AIO then creates and updates its own nextcloud-aio-* containers: they count as part of this app, and uninstalling stops and removes them. Their data volumes are kept unless you also delete the data."
+}

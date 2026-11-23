@@ -1,0 +1,19 @@
+{
+  "id": "syncthing",
+  "name": "Syncthing",
+  "description": "Keep folders in sync between your computers and phones, directly and encrypted.",
+  "category": "Files",
+  "template_version": 1,
+  "main_service": "syncthing",
+  "ports": [
+    {"id": "gui", "container": 8384, "host": 8384, "description": "Web page"},
+    {"id": "sync_tcp", "container": 22000, "host": 22000, "fixed": true, "description": "File transfers"},
+    {"id": "sync_udp", "container": 22000, "host": 22000, "protocol": "udp", "fixed": true, "description": "File transfers (QUIC)"}
+  ],
+  "volumes": [
+    {"id": "config", "container": "/var/syncthing/config", "default": "config", "owner": {"uid": 1000, "gid": 1000}, "description": "Syncthing's settings, keys and database"},
+    {"id": "data", "container": "/var/syncthing/Sync", "default": "Sync", "share_hint": "backups", "owner": {"uid": 1000, "gid": 1000}, "description": "Synced folders: the backups share when it exists"}
+  ],
+  "webui": {"port": "gui", "path": "/"},
+  "notes": "Set a user and password for the web page first (Actions, Settings, GUI): until then anyone on your network can open it. Keep synced folders under /var/syncthing/Sync, which is your backups share; folders anywhere else are lost when the app is updated. Syncthing writes as user 1000 in the shares' group, so SMB users can open what it syncs. Finding devices on the local network needs host networking (Advanced, Network: Host); without it, devices still connect through Syncthing's global discovery."
+}

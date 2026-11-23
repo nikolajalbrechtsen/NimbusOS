@@ -5,13 +5,18 @@
 #       docker-compose.yml.j2 and returns the final Compose text:
 #         1. Jinja2 SandboxedEnvironment with StrictUndefined. Templates see
 #            stack, env (resolved values), ports (id -> host port), host_ip,
-#            hostname; every value goes through the "q" filter, which writes
+#            hostname, timezone (this computer's, e.g. Europe/Copenhagen) and
+#            share_gid (the nimbus-smb group, for apps that write into
+#            shares); every value goes through the "q" filter, which writes
 #            it as a JSON string (valid YAML) with "$" doubled so Compose
 #            doesn't interpolate it. Nothing a user types can add YAML.
 #         2. The engine then sets the main service's ports, volumes,
 #            environment, network mode and restart policy from the install
 #            inputs, and the project name, so 1-click and Advanced install
-#            produce the same shape.
+#            produce the same shape. In bridge mode the service joins the
+#            project's network, unless the template asks for Docker's
+#            default bridge itself ("network_mode: bridge", as Nextcloud
+#            AIO's own Compose file does).
 #       check_binds(doc, ...) enforces NOTE-30 on every deploy, hand-edited
 #       or not: a bind mount must resolve inside the app's stack folder,
 #       inside a share, or be one of the app's declared host paths.
@@ -72,7 +77,7 @@ def volume_spec(volume):
     return f"{volume['source']}:{volume['container']}" + (":ro" if volume.get("read_only") else "")
 
 
-def build(manifest, template, inputs, *, host_ip="", hostname=""):
+def build(manifest, template, inputs, *, host_ip="", hostname="", timezone="Etc/UTC", share_gid=0):
     """Return (compose_text, compose_dict) for INPUTS (see apps_service)."""
     context = {
         "stack": inputs["name"],
@@ -80,6 +85,8 @@ def build(manifest, template, inputs, *, host_ip="", hostname=""):
         "ports": {p["id"]: p["host"] for p in inputs["ports"] if p.get("id")},
         "host_ip": host_ip,
         "hostname": hostname,
+        "timezone": timezone,
+        "share_gid": share_gid,
     }
     text = render(template, context)
     try:
@@ -99,8 +106,10 @@ def build(manifest, template, inputs, *, host_ip="", hostname=""):
         svc["network_mode"] = "host"
         svc.pop("ports", None)
         svc.pop("networks", None)
+        svc.pop("hostname", None)                     # Docker refuses one with host networking: it's the computer's
     else:
-        svc.pop("network_mode", None)
+        if not (mode == "bridge" and svc.get("network_mode") == "bridge"):
+            svc.pop("network_mode", None)
         svc["ports"] = [port_spec(p) for p in inputs["ports"]]
         if not svc["ports"]:
             svc.pop("ports")

@@ -1,0 +1,19 @@
+{# catalog/syncthing/docker-compose.yml.j2: Syncthing, as in its
+   README-Docker: the latest image, the web page on 8384 and transfers on
+   22000/tcp+udp. Its config (STHOMEDIR, /var/syncthing/config) stays in the
+   app's folder; the synced data is /var/syncthing/Sync (Syncthing's default
+   folder), bound to the backups share by share_hint. The share itself isn't
+   mounted as /var/syncthing, because the entrypoint chowns $HOME to
+   PUID:PGID and would take the share's folder from root:nimbus-smb.
+   It runs as uid 1000 (the image's default) with the shares' group and
+   umask 002, so its files stay writable for SMB users. The device name is
+   this computer's name.
+   The engine adds the ports, volumes, environment and restart policy. #}
+services:
+  syncthing:
+    image: "docker.io/syncthing/syncthing:latest"
+    hostname: {{ hostname | q }}
+    environment:
+      PUID: "1000"
+      PGID: {{ share_gid | string | q }}
+      UMASK: "002"

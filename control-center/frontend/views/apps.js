@@ -147,13 +147,16 @@ export async function render(root, ctx) {
         text: "Install the nimbus-catalog package: sudo apt install nimbus-catalog" })));
       return out;
     }
+    // An app with fixed container names (Nextcloud AIO) can be installed once.
+    const once = (app) => app.single_instance && app.installed_as.length > 0;
     out.push(h("div", { class: "catalog-grid" }, catalog.apps.map((app) => h("article", { class: "panel app-card" },
       h("header", {}, appIcon(app.icon, app.name, true), h("div", {}, h("h3", { text: app.name }), ui.tag("", app.category))),
       h("p", { text: app.description }),
       h("footer", {},
-        ui.button({ label: "Install", kind: "primary", small: true, onClick: () => oneClick(app) }),
-        ui.button({ label: "Advanced…", small: true, onClick: () => advanced(app.id) }),
-        app.installed_as.length ? h("span", { class: "dim", text: `Installed as ${app.installed_as.join(", ")}` }) : null)))));
+        ui.button({ label: "Install", kind: "primary", small: true, disabled: once(app), onClick: () => oneClick(app) }),
+        ui.button({ label: "Advanced…", small: true, disabled: once(app), onClick: () => advanced(app.id) }),
+        app.installed_as.length ? h("span", { class: "dim", text: once(app) ? `Installed as ${app.installed_as[0]} (one per computer)`
+          : `Installed as ${app.installed_as.join(", ")}` }) : null)))));
     return out;
   }
 
