@@ -469,6 +469,9 @@ Notes:
 | `/dev/kvm is missing or not usable` | Virtualization (VT-x or AMD-V) on in the firmware settings; your user in the `kvm` group. |
 | The guest can't reach the mirror | `tools/test-mirror.sh serve` is running; on the host, `curl -sI http://127.0.0.1:8080/apt/dists/stable/InRelease` answers 200. |
 | The installed system doesn't start with Secure Boot | PLAN NOTE-07 and assumption A6: report it with a photo of the screen. Try `--no-secure-boot` to see whether only Secure Boot fails. |
+| QEMU stops with `KVM: entry failed, hardware error 0xffffffff` and `SMM=1` (WSL 2) | WSL 2's KVM runs inside Hyper-V, which can't run the System Management Mode that OVMF's Secure Boot firmware uses once the kernel calls it. The boot menu still appears. Use `--no-secure-boot` there, and test Secure Boot on a Linux host or a real PC. |
+| `mv: … Cannot allocate memory` at the end of the ISO build (WSL 2) | Writing a large file to the Windows drive (`/mnt/c`) through WSL can fail under memory pressure, and `dist/` is in the checkout. Clone the repository into WSL's own file system (for example `~/NimbusOS`) and build there. The finished ISO is still in the work volume as `nimbusos-amd64.hybrid.iso` (`sudo podman volume inspect nimbus-work` shows where). |
+| WSL stops answering while the guest runs | WSL takes at most half of Windows' memory by default. Close other programs, give the guest less (`--memory 4608`), or raise WSL's limit in `.wslconfig`. |
 | The VM tab can't start a VM | Nested virtualization: `ls -l /dev/kvm` in the guest. |
 | `test-mirror.sh publish` refuses | Commit your changes first; the test builds from a clean tree, like a release. |
 | `test-mirror.sh iso` says the address is its own gateway | Rootless Podman uses `10.0.2.2` itself. Run the build as root (`sudo`), as shown above. |
