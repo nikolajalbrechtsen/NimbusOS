@@ -139,9 +139,9 @@ check "kdeglobals selects the global theme" grep -qx 'LookAndFeelPackage=org.nim
 # KConfig merges ours over desktop-base's /etc/xdg/kcm-about-distrorc key by
 # key: every key desktop-base sets must be set in ours too (NOTE-72).
 ABOUT=/etc/xdg/nimbusos/kcm-about-distrorc
-for key in $(sed -n 's/^\([A-Za-z]*\)=.*/\1/p' /etc/xdg/kcm-about-distrorc 2>/dev/null); do
+while read -r key; do
 	check "About this System: $key is set by NimbusOS, not inherited from desktop-base" grep -q "^$key=" "$ABOUT"
-done
+done < <(sed -n 's/^\([A-Za-z]*\)=.*/\1/p' /etc/xdg/kcm-about-distrorc 2>/dev/null)
 check "About this System: Version is the package's version" \
 	grep -qx "Version=$(dpkg-query -W -f='${Version}' nimbusos-branding | sed 's/~beta\./-beta./')" "$ABOUT"
 check "SDDM: the nimbus theme" grep -qx 'Current=nimbus' /etc/sddm.conf.d/10-nimbusos.conf
