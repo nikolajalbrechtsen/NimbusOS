@@ -13,7 +13,8 @@
 #                             so it survives restarts of the services it
 #                             upgrades, nimbus-control and privd included
 #                             (NOTE-35); returns the job id. Refused while
-#                             another one runs.
+#                             another one, or the timer's check or auto
+#                             run, is running (not while one waits to retry).
 #         update.follow       streams that unit's journal to the caller until
 #                             the unit has finished, then reports its exit
 #                             status. Works again after a reconnect.
@@ -53,10 +54,31 @@ def unit_name(job):
     return f"{UNIT_PREFIX}{job}.service"
 
 
+# A unit waiting to be restarted (nimbus-update-auto.service after a busy
+# exit, for 30 minutes) is "activating" to systemd but runs nothing and holds
+# no lock, so it mustn't block "Install updates" (NOTE-72).
+WAITING_SUBSTATES = ("auto-restart", "auto-restart-queued")
+
+
 def running_update_units():
+    """The nimbus-update-* units doing something now: our install jobs, and
+    the timer's check and auto runs. Columns: UNIT LOAD ACTIVE SUB DESCRIPTION."""
     proc = runner.run([SYSTEMCTL, "list-units", "--type=service", "--state=activating,running",
                        "--plain", "--no-legend", "--no-pager", f"{UNIT_PREFIX}*"], timeout=15)
-    return [line.split()[0] for line in proc.stdout.splitlines() if line.strip()]
+    units = []
+    for line in proc.stdout.splitlines():
+        fields = line.split()
+        if fields and not (len(fields) > 3 and fields[3] in WAITING_SUBSTATES):
+            units.append(fields[0])
+    return units
+
+
+def is_job_unit(unit):
+    try:
+        job_id(unit.removeprefix(UNIT_PREFIX).removesuffix(".service"))
+        return True
+    except ValidationError:
+        return False
 
 
 def unit_state(unit):
@@ -106,7 +128,9 @@ def history(ctx, args):
 def install(ctx, args):
     running = running_update_units()
     if running:
-        raise Busy(f"Updates are already being installed ({running[0]}).")
+        if is_job_unit(running[0]):
+            raise Busy(f"Updates are already being installed ({running[0]}).")
+        raise Busy(f"A scheduled update run is in progress ({running[0]}); try again when it has finished.")
     job = secrets.token_hex(6)
     runner.run([SYSTEMD_RUN, f"--unit={unit_name(job)}", "--description=NimbusOS updates (Control Center)",
                 "--property=RemainAfterExit=yes", "--quiet", NIMBUS_UPDATE, "install"], timeout=30)

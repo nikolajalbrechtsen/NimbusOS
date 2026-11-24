@@ -4,7 +4,8 @@ What: checks the parts of nimbus-update that decide what users are told and
 what gets written: apt error classification (one message per problem, the
 right source and kind, harmless warnings ignored), update.conf reading and
 writing, the beta source, origin grouping, release selection per channel,
-apt history parsing, and `status --json` on a system that was never checked.
+apt history parsing, `status --json` on a system that was never checked, and
+what a busy lock does (only the scheduled check skips quietly).
 
 Why: a wrong classification would show a bad signature as "no updates"
 (spec 4.4), and a wrong conf write would silently change the user's channel.
@@ -17,6 +18,8 @@ import importlib.machinery
 import importlib.util
 import json
 import pathlib
+import subprocess
+import sys
 import types
 
 import pytest
@@ -261,3 +264,35 @@ def test_status_json_before_first_check(nu, capsys):
     assert status["reboot_packages"] == ["linux-image-amd64"]
     assert status["update_available"] is False
     assert status["desktop_metapackage_installed"] is True
+
+
+# --- a busy lock (docs/PLAN.md NOTE-72) -------------------------------------------
+
+# Holds an fcntl lock the way another nimbus-update run would; POSIX record
+# locks don't conflict inside one process, so it has to be a second one.
+HOLD_LOCK = """
+import fcntl, os, sys, time
+fd = os.open(sys.argv[1], os.O_RDWR | os.O_CREAT, 0o600)
+fcntl.lockf(fd, fcntl.LOCK_EX)
+print("held", flush=True)
+time.sleep(60)
+"""
+
+
+def test_a_busy_lock_skips_only_the_scheduled_check(nu, monkeypatch, tmp_path, capsys):
+    # Found in the QEMU test: the daily check started during an install, exited
+    # 75 and left nimbus-update-check.service failed, which the dashboard showed.
+    monkeypatch.setattr(nu, "require_root", lambda: None)
+    monkeypatch.setattr(nu, "LOCK_PATH", str(tmp_path / "nimbus-update.lock"))
+    monkeypatch.setattr(nu, "apt_update", lambda lock_timeout: pytest.fail("checked despite the busy lock"))
+    holder = subprocess.Popen([sys.executable, "-c", HOLD_LOCK, nu.LOCK_PATH], stdout=subprocess.PIPE, text=True)
+    try:
+        assert holder.stdout.readline() == "held\n"
+        assert nu.main(["--json", "check", "--scheduled"]) == 0
+        assert json.loads(capsys.readouterr().out) == {"skipped": True, "busy": True}
+        assert nu.main(["check"]) == nu.EX_BUSY
+        assert "try again when it has finished" in capsys.readouterr().err
+        assert nu.main(["install"]) == nu.EX_BUSY
+    finally:
+        holder.kill()
+        holder.wait()

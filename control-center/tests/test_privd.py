@@ -259,6 +259,24 @@ def test_update_install_refuses_while_one_runs(tmp_path, audit_log, fake_runner)
     assert err.value.code == "busy" and "already being installed" in err.value.message
 
 
+def test_update_install_waits_for_a_scheduled_run(tmp_path, audit_log, fake_runner):
+    fake_runner([((updates.SYSTEMCTL, "list-units"),
+                  "nimbus-update-check.service loaded activating start Check for NimbusOS and Debian updates\n")])
+    with pytest.raises(PrivdError) as err:
+        call(tmp_path, REGISTRY, "update.install")
+    assert err.value.code == "busy" and "scheduled update run is in progress" in err.value.message
+
+
+def test_update_install_ignores_a_unit_waiting_to_retry(tmp_path, audit_log, fake_runner):
+    # NOTE-72: nimbus-update-auto.service waits 30 minutes after a busy exit,
+    # "activating" to systemd; that must not refuse "Install updates".
+    fake = fake_runner([((updates.SYSTEMCTL, "list-units"),
+                         "nimbus-update-auto.service loaded activating auto-restart Install NimbusOS updates\n"),
+                        ((updates.SYSTEMD_RUN,), "")])
+    assert len(call(tmp_path, REGISTRY, "update.install")["job"]) == 12
+    assert any(a[0] == updates.SYSTEMD_RUN for a in fake.argvs)
+
+
 def test_update_follow_streams_until_the_unit_finishes(tmp_path, audit_log, fake_runner, monkeypatch):
     monkeypatch.setattr(updates, "POLL_SECONDS", 0.01)
     states = iter(["LoadState=loaded\nActiveState=active\nSubState=running\nResult=success\nExecMainStatus=0\n"] * 3

@@ -22,7 +22,9 @@
 #       Python standard library plus python3-apt only.
 #
 # Exit status: 0 success, 1 failure, 2 usage error, 75 busy (another apt or
-#       update run holds a lock; the systemd unit retries later).
+#       update run holds a lock; for "auto", its systemd unit retries later).
+#       "check --scheduled" never exits 75: when another update run holds
+#       the lock, that run refreshes the status, so the check is skipped.
 #
 # Build values below are filled in from build/nimbus.conf when the package is
 # built (tools/build-debs.sh); in the source they are placeholder tokens.
@@ -666,9 +668,20 @@ def cmd_check(args):
     if args.scheduled and conf["POLICY"] == "off":
         emit(args, {"skipped": True, "policy": "off"}, "Update policy is Off; no scheduled check.")
         return 0
-    with file_lock(LOCK_PATH):
-        errors = apt_update(lock_timeout=120)
-        status = refresh_status(errors, now_utc())
+    try:
+        with file_lock(LOCK_PATH):
+            errors = apt_update(lock_timeout=120)
+            status = refresh_status(errors, now_utc())
+    except Busy:
+        if not args.scheduled:
+            raise
+        # The lock's holder is another nimbus-update run (install, auto, check
+        # or channel), and each refreshes the status before it lets go. Exiting
+        # 75 here left nimbus-update-check.service failed until the next day,
+        # and the dashboard reported it (found in the QEMU test, NOTE-72).
+        emit(args, {"skipped": True, "busy": True},
+             "Another update run is in progress and refreshes the status itself; no scheduled check.")
+        return 0
     emit(args, status, describe(status))
     if args.scheduled:
         return 0          # the status file records problems; the timer must not "fail"
@@ -870,7 +883,9 @@ def main(argv=None):
         print(f"nimbus-update: {exc}", file=sys.stderr)
         return 2
     except Busy as exc:
-        print(f"nimbus-update: busy, retrying later ({exc} is held by another update or apt run)", file=sys.stderr)
+        # Only "auto" is retried, by its systemd unit; anyone else must try again.
+        later = "the timer tries again later" if args.command == "auto" else "try again when it has finished"
+        print(f"nimbus-update: busy: {exc} is held by another update or apt run; {later}.", file=sys.stderr)
         return EX_BUSY
 
 

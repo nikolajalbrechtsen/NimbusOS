@@ -37,7 +37,8 @@ With
 .B \-\-scheduled
 (used by the daily timer) nothing is done when the policy is
 .BR off ,
-and the exit status is always 0.
+or while another update run holds the lock (that run refreshes the status
+itself), and the exit status is always 0.
 .TP
 .B install
 Refresh the package lists and run a full upgrade, non-interactively,
@@ -91,7 +92,8 @@ Pinning: the NimbusOS repository may supply only NimbusOS's own packages.
 .I /var/lib/nimbusos/update\-status.json
 Result of the last check.
 .SH EXIT STATUS
-0 success, 1 failure, 2 usage error (for example not root), 75 busy.
+0 success, 1 failure, 2 usage error (for example not root), 75 busy
+(another update, apt or unattended-upgrades run holds a lock).
 .SH SEE ALSO
 .BR apt\-get (8),
 .BR unattended\-upgrades (8),

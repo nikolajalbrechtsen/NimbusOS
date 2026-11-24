@@ -1,7 +1,9 @@
 # nimbus-update-check.service — daily NimbusOS update check (nimbusos-release)
 # Refreshes the package lists and writes /var/lib/nimbusos/update-status.json
 # for the Control Center's dashboard and Updates page. Does nothing when the
-# update policy is Off (docs/PLAN.md NOTE-34).
+# update policy is Off (docs/PLAN.md NOTE-34), or while another update run
+# holds nimbus-update's lock: that run refreshes the status itself, and the
+# unit must not be left "failed" for the dashboard to report (NOTE-72).
 [Unit]
 Description=Check for NimbusOS and Debian updates
 Documentation=man:nimbus-update(1)
