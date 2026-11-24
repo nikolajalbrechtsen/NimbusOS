@@ -136,6 +136,17 @@ for pair in "inter-regular-16:Inter Regular 16" "inter-bold-16:Inter Bold 16" "i
 	check "theme.txt uses \"$font\"" grep -qF "\"$font\"" "$G/theme.txt"
 done
 check "kdeglobals selects the global theme" grep -qx 'LookAndFeelPackage=org.nimbusos.desktop' /etc/xdg/kdeglobals
+# KConfig merges ours over desktop-base's /etc/xdg/kcm-about-distrorc key by
+# key: every key desktop-base sets must be set in ours too (NOTE-72).
+ABOUT=/etc/xdg/nimbusos/kcm-about-distrorc
+for key in $(sed -n 's/^\([A-Za-z]*\)=.*/\1/p' /etc/xdg/kcm-about-distrorc 2>/dev/null); do
+	check "About this System: $key is set by NimbusOS, not inherited from desktop-base" grep -q "^$key=" "$ABOUT"
+done
+check "About this System: Version is the package's version" \
+	grep -qx "Version=$(dpkg-query -W -f='${Version}' nimbusos-branding | sed 's/~beta\./-beta./')" "$ABOUT"
+check "SDDM: the nimbus theme" grep -qx 'Current=nimbus' /etc/sddm.conf.d/10-nimbusos.conf
+check "SDDM: no on-screen keyboard input method (InputMethod empty)" \
+	sh -c 'sed -n "/^\[General\]/,/^\[/p" "$1" | grep -qx "InputMethod="' _ /etc/sddm.conf.d/10-nimbusos.conf
 check "kdeglobals carries the Nimbus Dark colours" sh -c 'grep -qx "\[Colors:View\]" /etc/xdg/kdeglobals && grep -qx "DecorationFocus=108,196,255" /etc/xdg/kdeglobals'
 for json in /usr/share/plasma/look-and-feel/org.nimbusos.desktop/metadata.json /usr/share/wallpapers/NimbusSky/metadata.json; do
 	check "valid JSON: $json" python3 -m json.tool "$json"

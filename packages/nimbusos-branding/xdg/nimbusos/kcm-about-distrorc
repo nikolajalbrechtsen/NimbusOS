@@ -3,9 +3,14 @@
 # desktop-base already owns /etc/xdg/kcm-about-distrorc, so NimbusOS keeps its
 # own copy in /etc/xdg/nimbusos, which the Plasma session puts first in
 # XDG_CONFIG_DIRS (plasma-workspace/env/10-nimbusos-xdg.sh).
+#
+# KConfig merges the two files key by key, so every key desktop-base sets is
+# set here too: without Version, its "Version=13" made the page say
+# "NimbusOS 13" (found in the QEMU test, docs/PLAN.md NOTE-72).
 
 [General]
 Name=@NIMBUS_NAME@
+Version=@NIMBUS_DISPLAY_VERSION@
 LogoPath=/usr/share/icons/hicolor/scalable/apps/nimbusos.svg
 Website=@NIMBUS_HOME_URL@
-Variant=@NIMBUS_DISPLAY_VERSION@ (@NIMBUS_CHANNEL@)
+Variant=Channel: @NIMBUS_CHANNEL@
