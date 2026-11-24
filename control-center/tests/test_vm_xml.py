@@ -28,7 +28,7 @@ from nimbus_control import vm_xml
 
 def spec(**changes):
     s = {"name": "web1", "uuid": "0b1c3d2e-4f50-4a6b-8c7d-9e0f1a2b3c4d", "preset": "linux", "vcpus": 2, "memory_mib": 2048,
-         "firmware": "uefi", "pool": "nimbus-images", "volume": "web1.qcow2", "iso": "/var/lib/nimbus-vms/isos/debian.iso",
+         "firmware": "uefi", "disk_path": "/var/lib/nimbus-vms/images/web1.qcow2", "iso": "/var/lib/nimbus-vms/isos/debian.iso",
          "drivers_iso": None, "network": {"mode": "nat"}, "vnc_password": "Ab3dE6gH", "created": "2026-11-18T10:00:00+00:00"}
     s.update(changes)
     return s
@@ -48,7 +48,9 @@ def test_linux_preset():
     assert d.find("features/hyperv") is None and d.find("features/smm") is None and d.find("devices/tpm") is None
     assert d.find("cpu").get("mode") == "host-passthrough" and d.find("clock").get("offset") == "utc"
     disk, cdrom = d.findall("devices/disk")
-    assert disk.find("source").attrib == {"pool": "nimbus-images", "volume": "web1.qcow2"}
+    # a file path, which libvirt's AppArmor helper can allow (NOTE-72)
+    assert disk.get("type") == "file"
+    assert disk.find("source").attrib == {"file": "/var/lib/nimbus-vms/images/web1.qcow2"}
     assert disk.find("target").attrib == {"dev": "vda", "bus": "virtio"} and disk.find("boot").get("order") == "1"
     assert disk.find("driver").attrib == {"name": "qemu", "type": "qcow2", "discard": "unmap"}
     assert cdrom.get("device") == "cdrom" and cdrom.find("source").get("file") == "/var/lib/nimbus-vms/isos/debian.iso"

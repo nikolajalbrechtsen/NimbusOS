@@ -28,6 +28,7 @@
 # =============================================================================
 
 import copy
+import os
 import pathlib
 import sys
 
@@ -234,9 +235,10 @@ class FakeLibvirt:
             info = vm_xml.parse_domain(vm["xml"])
             root = ET.fromstring(vm["xml"])
             for disk in info["disks"]:
-                if disk.get("pool") == "nimbus-images" and disk.get("volume") in self.volumes:
-                    disk.update(path=f"{self.images_dir}/{disk['volume']}", capacity=self.volumes[disk["volume"]],
-                                allocation=0, in_pool=True)
+                # like libvirt's storageVolLookupByPath: a file in the pool's directory
+                vol = os.path.basename(disk.get("path") or "")
+                if disk.get("path") and os.path.dirname(disk["path"]) == self.images_dir and vol in self.volumes:
+                    disk.update(capacity=self.volumes[vol], allocation=0, in_pool=True)
                 elif disk.get("path"):
                     disk.update(capacity=8 * 1024 ** 3, allocation=0, in_pool=False)
             unit = {"KiB": 1024, "MiB": 1024 ** 2, "GiB": 1024 ** 3}[root.find("memory").get("unit", "KiB")]

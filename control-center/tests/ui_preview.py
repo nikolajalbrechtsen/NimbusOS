@@ -204,10 +204,10 @@ def build_vms(tmp):
            ("win11", "windows", 4, 8192, "uefi", "Win11_24H2_English_x64.iso", "virtio-win-0.1.266.iso", 80, "stopped", True),
            ("backup-test", "linux", 1, 2048, "bios", None, None, 16, "paused", False)]
     for i, (name, preset, vcpus, mem, fw, iso, drivers, disk, st, auto) in enumerate(vms):
-        volume, _ = lv.create_volume(name, disk * GIB)
+        _, path = lv.create_volume(name, disk * GIB)
         lv.define(vm_xml.build_domain({
             "name": name, "uuid": f"6c2f0a1e-0000-4000-8000-00000000000{i}", "preset": preset, "vcpus": vcpus, "memory_mib": mem,
-            "firmware": fw, "pool": "nimbus-images", "volume": volume, "iso": iso and str(isos / iso),
+            "firmware": fw, "disk_path": path, "iso": iso and str(isos / iso),
             "drivers_iso": drivers and str(isos / drivers), "network": {"mode": "nat"}, "vnc_password": "Pr3view0",
             "created": "2026-11-10T08:00:00+00:00"}))
         lv.vms[name].update(state=st, autostart=auto)

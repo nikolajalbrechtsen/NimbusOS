@@ -211,7 +211,7 @@ class VmService:
         spec = await self.validate(raw)
         volume, path = await self._lv("create_volume", spec["name"], spec["disk_gib"] * GIB)
         xml = vm_xml.build_domain({
-            **spec, "uuid": str(uuid.uuid4()), "pool": "nimbus-images", "volume": volume,
+            **spec, "uuid": str(uuid.uuid4()), "disk_path": path,
             "vnc_password": "".join(secrets.choice(VNC_ALPHABET) for _ in range(8)),
             "created": datetime.datetime.now(datetime.UTC).replace(microsecond=0).isoformat(),
         }, kvm=spec["kvm"])

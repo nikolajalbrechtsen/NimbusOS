@@ -107,9 +107,14 @@ def build_domain(spec, kvm=True):
     _sub(pm, "suspend-to-disk", {"enabled": "no"})
 
     dev = _sub(dom, "devices")
-    disk = _sub(dev, "disk", {"type": "volume", "device": "disk"})
+    # The disk by its file path, not as a pool volume (type "volume"):
+    # libvirt's AppArmor helper doesn't resolve pool volumes, so the VM's
+    # profile left the disk out and QEMU couldn't open it (found in the QEMU
+    # test, docs/PLAN.md NOTE-72). The file still belongs to the nimbus-images
+    # pool; libvirt_api finds its volume by path.
+    disk = _sub(dev, "disk", {"type": "file", "device": "disk"})
     _sub(disk, "driver", {"name": "qemu", "type": "qcow2", "discard": "unmap"})
-    _sub(disk, "source", {"pool": spec["pool"], "volume": spec["volume"]})
+    _sub(disk, "source", {"file": spec["disk_path"]})
     _sub(disk, "target", {"dev": "vda", "bus": "virtio"} if virtio else {"dev": "sda", "bus": "sata"})
     _sub(disk, "boot", {"order": 1})
     cdroms = ["sda", "sdb"] if virtio else ["sdb", "sdc"]
