@@ -651,8 +651,11 @@ class AppsService:
             if record.get("pending"):
                 state, reason = "unknown", ""
                 record["template_version"] = manifest["template_version"] if manifest else 0
-            elif containers is None:
-                state, reason = "unknown", problem
+            elif containers is None or problem is not None:
+                # Docker didn't answer: the listing says nothing, so the app is
+                # unknown, not "missing" (the dashboard passes an empty list
+                # with the problem; found in the QEMU test, NOTE-72).
+                state, reason = "unknown", problem or ""
             else:
                 state, reason = self.stack_status(by_project.get(name, []), record.get("desired", "running"))
             job = self.jobs.running(name)

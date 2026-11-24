@@ -326,6 +326,16 @@ def test_status_and_web_links(w):
     assert {a["state"] for a in r["apps"]} == {"unknown"}
 
 
+def test_a_docker_timeout_is_not_missing_containers(w):
+    # What the dashboard passes when Docker didn't answer in time: an empty
+    # list together with the problem. It once raised "Its containers are
+    # missing" for an app that was running (NOTE-72).
+    install(w)
+    listing = w.client.portal.call(w.svc.list, [], "Docker did not answer in time.")
+    states = {a["name"]: (a["state"], a["reason"]) for a in listing["apps"]}
+    assert states and all(s == ("unknown", "Docker did not answer in time.") for s in states.values())
+
+
 C = dict(service="web", state="running", exit_code=0, health=None, oom_killed=False)
 
 
