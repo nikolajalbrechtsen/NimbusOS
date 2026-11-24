@@ -215,13 +215,20 @@ NimbusOS guest; **host** runs on your machine, from the repository root.
 The live user is `nimbus`, password `live`. For the installed system,
 create a user `tester` in the installer.
 
+Plasma locks the screen and then turns the display off after a few minutes
+without input, and the test has long waits. If the guest's screen is black,
+move the mouse; if it is locked, log in again. To avoid it, turn both off for
+`tester` in **System Settings → Screen Locking** and **Power Management**.
+
 ### 1. Live boot, install, reboot (spec step 1)
 
 Boot the UEFI machine.
 
 1. The boot menu says **NimbusOS** and offers "Start NimbusOS", "Start
    NimbusOS (safe graphics)" and "Start NimbusOS (fail-safe mode)", with a
-   10-second countdown.
+   10-second countdown. Without Secure Boot its text is in Inter. With
+   Secure Boot on, it is in GRUB's built-in font: Debian's signed GRUB
+   loads no font files in lockdown mode. That is expected.
 2. The NimbusOS splash appears, then the Plasma desktop, logged in as
    `nimbus` without a password. **guest:** `echo $XDG_SESSION_TYPE` prints
    `wayland` (PLAN NOTE-63).
@@ -259,8 +266,43 @@ ls /usr/lib/nimbusos-live
 Open **System Settings → About this System** (or run `kinfocenter`): it
 shows NimbusOS with its logo and website (PLAN NOTE-55).
 
+GRUB's own updates must work on what the installer set up (PLAN NOTE-72).
+**guest**, on the UEFI machine:
+
+```sh
+ls /boot/efi/EFI/BOOT
+sudo debconf-show grub-efi-amd64 | grep extra_removable
+sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --reinstall grub-efi-amd64 shim-signed
+```
+
+- `EFI/BOOT` holds `bootx64.efi` (shim), `grubx64.efi`, `mmx64.efi` and
+  `grub.cfg`, and `force_efi_extra_removable` is `true`;
+- the reinstall ends without an error.
+
+On the BIOS machine:
+
+```sh
+sudo debconf-show grub-pc | grep 'install_devices:'
+sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --reinstall grub-pc
+```
+
+- `install_devices` names the system disk
+  (`/dev/disk/by-id/virtio-NIMBUS-SYSTEM`);
+- the reinstall says "Installation finished. No error reported." If it
+  says "You must correct your GRUB install devices", every later update
+  would fail.
+
+Then start the UEFI machine as a PC would after losing its boot entries:
+shut it down, delete its variable store (`OVMF_VARS_4M*.fd` in the
+machine's directory) and start it with `--iso none`. It still boots: with
+Secure Boot, shim and the NimbusOS menu appear (on WSL 2, QEMU then stops;
+see [When something fails](#when-something-fails)); without, it reaches
+the login screen. The rest of the test works the same on this machine.
+
 Repeat steps 1 to 4 on the BIOS machine. Its boot menu is ISOLINUX's, with
-the same three entries.
+the same three entries and **Utilities**. The installer's Partitions page
+says **BIOS**, makes an MSDOS partition table and puts the boot loader in
+the disk's Master Boot Record.
 
 ### 2. The NAS wizard in Pooled + parity mode (spec step 6)
 
@@ -304,9 +346,17 @@ smbclient -p 4445 //127.0.0.1/media -U tester -c 'put to-guest.txt; ls; get to-g
 cmp to-guest.txt back.txt && echo "same file both ways"
 ```
 
+`-U tester` asks for the SMB password the wizard set for `tester`. It is
+kept apart from the login password, though you may have chosen the same.
+
 Then copy a file from the guest into the share (for example with
 Dolphin at `/mnt/user/media`, or `cp`) and fetch it on the host with
 `smbclient … -c 'get <name>'`.
+
+Without a user, a **Secure** share (the wizard's default: everyone reads,
+users write) can be read but not written: `smbclient -N -p 4445
+//127.0.0.1/media -c ls` lists it, and `… -c 'put to-guest.txt'` is refused
+with `NT_STATUS_ACCESS_DENIED`.
 
 ### 4. Jellyfin bound to the media share (spec step 3)
 
@@ -326,9 +376,21 @@ Needs nested virtualization. **Virtual machines → Create VM**: a Linux VM with
 1 vCPU and 1 GiB of memory, booting an installer ISO (upload one, or copy it
 into the `isos` share). Start it.
 
+Any bootable ISO will do. A small one that shows a screen at once is iPXE's
+(9 MiB), from Debian's `ipxe` package. **host:**
+
+```sh
+apt-get download ipxe && dpkg-deb -x ipxe_*.deb ipxe
+ls -l ipxe/usr/lib/ipxe/ipxe.iso
+```
+
 - The Dashboard's Virtual machines row shows it running, with **Console**.
   **Console** (or the VM's tile under Quick open) opens its screen in the
   page, and the keyboard reaches the VM.
+
+On WSL 2 this VM runs three levels deep (Hyper-V, WSL's KVM, the NimbusOS
+guest). It starts, but libvirt's statistics take seconds to answer and the
+console can stay black. Check the console on a Linux host or a real PC.
 
 ### 6. The Dashboard's numbers (spec step 2)
 
@@ -352,6 +414,11 @@ sudo virsh domstats --cpu-total --balloon --vcpu
 - The exact values the Dashboard draws:
   `curl -s -H "Authorization: Bearer $(cat /run/nimbus-control/token)" http://127.0.0.1:7777/api/dashboard | python3 -m json.tool`
   (`apps` and `vms`).
+- Compare averages, not single readings. The Dashboard samples every
+  2 seconds and the tools at their own moments, so single CPU readings jump.
+  Read the Dashboard's value five times over the same 10 seconds you
+  measure, and average. A steady load makes it easier: an idle app, or a
+  VM busy at its boot menu.
 
 ### 7. `docker kill` raises an alert within 4 seconds (spec step 5)
 
@@ -361,13 +428,16 @@ Keep the Dashboard visible. **guest:**
 date +%T.%N; docker kill jellyfin-jellyfin-1
 ```
 
-"Needs attention" shows that Jellyfin exited unexpectedly within 4 seconds
-of the time printed. Its **Start** button brings it back, and the alert
-clears.
+Within 4 seconds of the time printed, "Needs attention" shows
+"jellyfin: jellyfin exited unexpectedly (exit code 137)." (137 is a kill).
+Its **Fix** button opens the app on the Apps page. Start it there, and the
+alert clears.
 
 ### 8. SnapRAID sees a move (PLAN NOTE-69)
 
-On the **Pool** tab, **Sync now** and wait for it to finish. Then **guest:**
+Until the first sync, the Dashboard says "Parity has never been synced". On
+the **Pool** tab, **Sync now** and wait for it to finish; the alert clears.
+Then **guest:**
 
 ```sh
 head -c 50M /dev/urandom > /mnt/user/media/moved.bin
@@ -379,7 +449,8 @@ sudo snapraid -c /etc/nimbus/snapraid.conf diff
 - `diff` lists `move media/moved.bin -> media/renamed.bin`. (A container
   can't produce this line; real disks with UUIDs do.)
 - The parity card shows about 50 MB not yet protected, which includes the
-  moved file. **Sync now** brings it back to nothing.
+  moved file. (The Dashboard raises an alert only above 10 GB.) **Sync
+  now** brings it back to nothing.
 
 ### 9. Updating from v0.1.0 to v0.1.1-beta.1 (spec step 8)
 
@@ -396,14 +467,20 @@ In the guest, **Updates**:
    group lists the seven packages at `0.1.1~beta.1`, and the Dashboard shows
    "NimbusOS 0.1.1-beta.1 is available".
 3. **Install updates.** The log streams into the drawer. The Control Center
-   restarts during the update and reconnects by itself.
+   and its helper restart during the update; the page reconnects by
+   itself, the log carries on, and the drawer ends with **Installed**.
 
 Then:
 
 - the sidebar shows `0.1.1-beta.1`, and **guest:** `grep VERSION /etc/os-release`
   agrees;
 - the SMB copy from step 3 still works, and Jellyfin's tile still opens it;
-- the Dashboard's update alert is gone.
+- the Dashboard's update alert is gone, and no "service has failed" alert
+  appeared.
+
+To repeat the update after a fix, publish the next beta (`v0.1.1-beta.2`,
+and so on): like the real repository, the mirror refuses to publish a
+version again with different contents.
 
 ### 10. `apt-cache policy`: the repository can't replace a Debian package (spec step 9)
 
@@ -438,8 +515,8 @@ while the guest is on Beta).
 
 In the guest, **Updates → Check now**:
 
-- a red banner says the NimbusOS repository's signature couldn't be
-  verified, with what to do. It never says "no updates";
+- one red banner, "NimbusOS repository: could not be verified", with what
+  to do. It never says "no updates";
 - the Dashboard shows "The NimbusOS update repository can't be checked".
 
 **host:** `tools/test-mirror.sh repair`, then **Check now** again: the
@@ -453,6 +530,7 @@ Copy this into the release's pull request or issue, and fill it in:
 NimbusOS smoke test: <version>, <ISO file name and SHA-256>
 Host: <OS, CPU>, QEMU <version>, nested virtualization <on/off>
 UEFI + Secure Boot  1 live/install/reboot [ ]  used space on / ____ GB
+UEFI, no Secure Boot (only if Secure Boot can't run here) [ ]
 BIOS                1 live/install/reboot [ ]
 2 NAS wizard, Pooled + parity [ ]   3 SMB both ways [ ]
 4 Jellyfin on media, Open tile [ ]  5 VM console from the Dashboard [ ]
@@ -473,5 +551,8 @@ Notes:
 | `mv: … Cannot allocate memory` at the end of the ISO build (WSL 2) | Writing a large file to the Windows drive (`/mnt/c`) through WSL can fail under memory pressure, and `dist/` is in the checkout. Clone the repository into WSL's own file system (for example `~/NimbusOS`) and build there. The finished ISO is still in the work volume as `nimbusos-amd64.hybrid.iso` (`sudo podman volume inspect nimbus-work` shows where). |
 | WSL stops answering while the guest runs | WSL takes at most half of Windows' memory by default. Close other programs, give the guest less (`--memory 4608`), or raise WSL's limit in `.wslconfig`. |
 | The VM tab can't start a VM | Nested virtualization: `ls -l /dev/kvm` in the guest. |
+| The VM runs but its console stays black (WSL 2) | Three levels of virtualization; see step 5. Check the console on a Linux host. |
+| The guest's screen is black, or asks for a password | Plasma's screen lock and power saving; see the start of [The smoke test](#the-smoke-test). |
+| The Control Center window says "This link has expired" | It opens with a one-time code that lasts 30 seconds. Open it again from the panel. If it happens every time, something holds the window before the page loads; report it with a screenshot. |
 | `test-mirror.sh publish` refuses | Commit your changes first; the test builds from a clean tree, like a release. |
 | `test-mirror.sh iso` says the address is its own gateway | Rootless Podman uses `10.0.2.2` itself. Run the build as root (`sudo`), as shown above. |
