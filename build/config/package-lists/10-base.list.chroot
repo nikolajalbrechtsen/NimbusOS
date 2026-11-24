@@ -28,6 +28,9 @@ ca-certificates
 cryptsetup
 systemd-timesyncd
 unattended-upgrades
+# hwclock, which Trixie moved here: the installer sets the hardware clock with
+# it (its step failed without it in the QEMU test, docs/PLAN.md NOTE-72)
+util-linux-extra
 
 # Networking
 network-manager
