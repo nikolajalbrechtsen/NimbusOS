@@ -5,7 +5,9 @@
 #       /run/nimbus-privd.sock and returns the result; .stream(verb, args)
 #       also yields the log lines a long operation sends while it runs.
 #       Every failure becomes PrivdError(code, message, field), with
-#       "unavailable" when the socket can't be reached. The wire format is
+#       "unavailable" when the socket can't be reached and "disconnected"
+#       when privd closes it mid-request (for example, an update restarting
+#       it). The wire format is
 #       nimbus_common.protocol.
 # Why:  docs/PLAN.md §4.3: the backend never runs privileged commands itself.
 # =============================================================================
@@ -53,7 +55,7 @@ class PrivdClient:
                 except TimeoutError:
                     raise PrivdError("failed", f"{verb} did not finish within {int(limit)} seconds.") from None
                 except (asyncio.IncompleteReadError, ConnectionError):
-                    raise PrivdError("failed", f"The privileged helper closed the connection during {verb}.") from None
+                    raise PrivdError("disconnected", f"The privileged helper closed the connection during {verb}.") from None
                 message = protocol.decode(line)
                 if message.get("event") == "log":
                     yield "log", message.get("line", "")

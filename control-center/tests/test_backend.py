@@ -161,6 +161,52 @@ def test_update_log_websocket(env):
     assert messages[2] == {"type": "done", "job": "0123456789ab", "ok": True, "exit_status": 0}
 
 
+class RestartingPrivd(FakePrivd):
+    """update.follow as an update that upgrades nimbus-control makes it: privd
+    is restarted after two lines; the next follow replays the unit's whole
+    journal (journalctl --lines=all), now with a third line, then finishes."""
+
+    def __init__(self):
+        super().__init__()
+        self.follows = 0
+
+    async def stream(self, verb, args=None, timeout=None):
+        if verb != "update.follow":
+            async for item in super().stream(verb, args, timeout):
+                yield item
+            return
+        self.follows += 1
+        yield "log", "Unpacking nimbus-control"
+        yield "log", "Setting up nimbus-control"
+        if self.follows == 1:
+            raise PrivdError("disconnected", "The privileged helper closed the connection during update.follow.")
+        yield "log", "Updates installed."
+        yield "result", {"job": "0123456789ab", "ok": True, "exit_status": 0}
+
+
+def test_update_log_survives_privd_restarting(env, monkeypatch):
+    # Found in the QEMU test (NOTE-72): the drawer said "Failed" for an update
+    # that succeeded, because privd restarted mid-follow.
+    from nimbus_control import updates_service
+    monkeypatch.setattr(updates_service, "FOLLOW_RETRY_SECONDS", 0)
+    privd = RestartingPrivd()
+    app, client = make(env, privd)
+    protocols = ["nimbus.v1", f"nimbus.token.{app.tokens.token}"]
+    with client.websocket_connect(WS_URL, subprotocols=protocols, headers={"origin": ORIGIN}) as ws:
+        messages = [ws.receive_json() for _ in range(4)]
+    assert [m.get("line") for m in messages[:3]] == ["Unpacking nimbus-control", "Setting up nimbus-control", "Updates installed."]
+    assert messages[3] == {"type": "done", "job": "0123456789ab", "ok": True, "exit_status": 0}
+    assert privd.follows == 2
+
+
+def test_update_log_real_errors_still_end_the_follow(env):
+    privd = FakePrivd(results={"update.follow": PrivdError("invalid_argument", "There is no such update run.")})
+    app, client = make(env, privd)
+    protocols = ["nimbus.v1", f"nimbus.token.{app.tokens.token}"]
+    with client.websocket_connect(WS_URL, subprotocols=protocols, headers={"origin": ORIGIN}) as ws:
+        assert ws.receive_json() == {"type": "error", "message": "There is no such update run."}
+
+
 @pytest.mark.parametrize("protocols, origin", [
     (["nimbus.v1"], ORIGIN),                                   # no token
     (["nimbus.v1", "nimbus.token." + "x" * 43], ORIGIN),        # wrong token

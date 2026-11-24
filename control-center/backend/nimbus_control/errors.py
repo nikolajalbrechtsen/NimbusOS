@@ -28,7 +28,7 @@ class ApiError(Exception):
         self.field = field
 
 
-PRIVD_STATUS = {"invalid_argument": 422, "busy": 409, "failed": 502, "unavailable": 503}
+PRIVD_STATUS = {"invalid_argument": 422, "busy": 409, "failed": 502, "disconnected": 502, "unavailable": 503}
 
 
 def _body(message, field=None):
