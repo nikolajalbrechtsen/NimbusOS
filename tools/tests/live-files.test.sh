@@ -21,6 +21,12 @@
 #                     suite/component pairs;
 #                     a second run changes nothing; without the keyring it
 #                     fails clearly
+#         grub-debconf  without grub-pc does nothing; with it, records the
+#                     disk whose MBR holds GRUB as grub-pc/install_devices
+#                     (by-id name, never a partition; else the device path);
+#                     no GRUB there or no answer from grub-probe: records
+#                     nothing and still exits 0; runs right after Calamares'
+#                     bootloader step
 #         live-session-setup  outside a live session does nothing; in one
 #                     puts an executable copy of "Install NimbusOS" on the
 #                     desktop, once
@@ -29,7 +35,7 @@
 #                     removes /usr/lib/nimbusos-live, keeps a listed file that
 #                     belongs to a package; without the list it fails
 #
-# Why:  docs/PLAN.md NOTE-06, NOTE-21, NOTE-63. These files decide what an
+# Why:  docs/PLAN.md NOTE-06, NOTE-21, NOTE-63, NOTE-72. These files decide what an
 #       installed system looks like, but run only inside the installer.
 #
 # Usage: tools/tests/live-files.test.sh
@@ -148,6 +154,46 @@ check "a second run changes nothing" sh -c 'sh "$1" >/dev/null && [ "$(sha256sum
 mkdir -p "$WORK/fakeroot/etc/apt/sources.list.d"
 check "fails clearly without Debian's keyring" \
 	sh -c '! sh "$1" "$2" >"$3" 2>&1 && grep -q "debian-archive-keyring.pgp is missing" "$3"' _ "$SF" "$WORK/fakeroot" "$WORK/sf-bad.out"
+
+# --- grub-debconf (NOTE-72) ------------------------------------------------------------------
+echo "grub-debconf"
+GD="$INC/usr/lib/nimbusos-live/grub-debconf"
+devices() { echo "get grub-pc/install_devices" | debconf-communicate grub-pc 2>/dev/null | sed -n 's/^0 //p'; }
+check "without grub-pc (a UEFI install): records nothing, exits 0" \
+	sh -c '"$1" >"$2" 2>&1 && grep -q "nothing to record" "$2"' _ "$GD" "$WORK/gd-uefi.out"
+apt-get install -y -q --no-install-recommends grub-pc >"$WORK/grub-pc.log" 2>&1 || { tail -n 30 "$WORK/grub-pc.log"; exit 1; }
+# Disks are image files here; a stand-in grub-probe names the one in
+# NIMBUS_TEST_DISK, and a by-id directory of our own links to them.
+mkdir -p "$WORK/stub" "$WORK/by-id"
+printf '#!/bin/sh\n[ -n "${NIMBUS_TEST_DISK:-}" ] && echo "$NIMBUS_TEST_DISK"\n' >"$WORK/stub/grub-probe"
+chmod +x "$WORK/stub/grub-probe"
+for d in grub nogrub unlinked; do truncate -s 1M "$WORK/$d.img"; done
+for d in grub unlinked; do dd if=/usr/lib/grub/i386-pc/boot.img of="$WORK/$d.img" conv=notrunc status=none; done
+ln -s "$WORK/grub.img" "$WORK/by-id/ata-NIMBUS_TEST-part1"     # sorts first, and is a partition
+ln -s "$WORK/grub.img" "$WORK/by-id/virtio-NIMBUS-TEST"
+ln -s "$WORK/nogrub.img" "$WORK/by-id/virtio-NIMBUS-EMPTY"
+gd() { env PATH="$WORK/stub:$PATH" NIMBUS_BY_ID_DIR="$WORK/by-id" NIMBUS_TEST_DISK="$1" "$GD" >"$WORK/gd.out" 2>&1; }
+reset_devices() { echo "grub-pc grub-pc/install_devices multiselect " | debconf-set-selections; }
+reset_devices
+gd "$WORK/grub.img" && rc=0 || rc=$?
+check "BIOS, GRUB in the disk's MBR: records the disk by its by-id name, not a partition's" \
+	test "$rc:$(devices)" = "0:$WORK/by-id/virtio-NIMBUS-TEST"
+reset_devices
+gd "$WORK/nogrub.img" && rc=0 || rc=$?
+check "the boot loader went elsewhere (no GRUB in that MBR): records nothing, says so, exits 0" \
+	sh -c '[ "$1" = 0 ] && [ -z "$2" ] && grep -q "doesn.t hold GRUB" "$3"' _ "$rc" "$(devices)" "$WORK/gd.out"
+gd "$WORK/unlinked.img" && rc=0 || rc=$?
+check "a disk without a by-id name: records its device path" test "$rc:$(devices)" = "0:$WORK/unlinked.img"
+reset_devices
+gd "" && rc=0 || rc=$?
+check "grub-probe fails: records nothing, says so, exits 0 (never stops the install)" \
+	sh -c '[ "$1" = 0 ] && [ -z "$2" ] && grep -q "grub-probe can.t name" "$3"' _ "$rc" "$(devices)" "$WORK/gd.out"
+check "Calamares runs it right after its bootloader step" python3 - "$INC/etc/calamares/settings.conf" <<'EOF'
+import sys, yaml
+s = yaml.safe_load(open(sys.argv[1]))
+execs = [m for block in s["sequence"] for kind, mods in block.items() if kind == "exec" for m in mods]
+sys.exit(0 if execs[execs.index("bootloader") + 1] == "shellprocess@nimbus-grub-debconf" else 1)
+EOF
 
 # --- the live files in place, as in the image -----------------------------------------------
 cp -a "$INC/." /

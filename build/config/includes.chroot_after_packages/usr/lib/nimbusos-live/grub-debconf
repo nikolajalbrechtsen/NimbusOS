@@ -1,0 +1,57 @@
+#!/bin/sh
+# =============================================================================
+# /usr/lib/nimbusos-live/grub-debconf: tell grub-pc where GRUB was installed
+# =============================================================================
+# What: run by Calamares inside the installed system right after its
+#       bootloader step (shellprocess nimbus-grub-debconf). On a BIOS install
+#       (grub-pc installed) it finds the disk that holds /boot/grub and, if
+#       that disk's Master Boot Record now holds GRUB, records the disk as
+#       debconf's grub-pc/install_devices: by its /dev/disk/by-id name when
+#       it has one, as Debian's installer does. UEFI installs, and a boot
+#       loader put elsewhere or nowhere, are left alone. It never stops the
+#       install: without the record, grub-pc's next upgrade asks instead.
+#       NIMBUS_BY_ID_DIR names another by-id directory (tests).
+# Why:  docs/PLAN.md NOTE-72. Calamares runs grub-install itself and leaves
+#       the question empty. grub-pc's next upgrade can't ask it
+#       non-interactively, so it stops with "You must correct your GRUB
+#       install devices before proceeding" and leaves the package
+#       half-configured, which blocks every later update, unattended-upgrades
+#       included (seen in the QEMU test).
+# =============================================================================
+set -eu
+
+me="nimbus-grub-debconf"
+BY_ID="${NIMBUS_BY_ID_DIR:-/dev/disk/by-id}"
+
+# Any state with grub-pc's files on disk, "half-configured" included: that is
+# where a failed upgrade leaves it, and the record lets it be configured.
+case "$(dpkg-query -W -f='${Status}' grub-pc 2>/dev/null || true)" in
+	*" installed"|*" half-configured"|*" unpacked"|*" half-installed"|*" triggers-"*) ;;
+	*)
+		echo "$me: grub-pc isn't installed (a UEFI install); nothing to record"
+		exit 0
+		;;
+esac
+if ! disk="$(grub-probe --target=disk /boot/grub 2>/dev/null)" || [ -z "$disk" ]; then
+	echo "$me: grub-probe can't name the disk that holds /boot/grub; grub-pc will ask on its next upgrade" >&2
+	exit 0
+fi
+# GRUB's boot sector (boot.img) carries the string "GRUB".
+if ! head -c 512 "$disk" 2>/dev/null | grep -aq GRUB; then
+	echo "$me: the Master Boot Record of $disk doesn't hold GRUB (boot loader put elsewhere); nothing recorded" >&2
+	exit 0
+fi
+
+target="$(readlink -f "$disk")"
+device="$disk"
+for link in "$BY_ID"/*; do
+	[ -L "$link" ] || continue
+	case "$link" in *-part[0-9]*) continue ;; esac
+	if [ "$(readlink -f "$link")" = "$target" ]; then
+		device="$link"
+		break
+	fi
+done
+
+echo "grub-pc grub-pc/install_devices multiselect $device" | debconf-set-selections
+echo "$me: grub-pc/install_devices is $device"
