@@ -137,9 +137,11 @@ def parity_alerts(parity, now):
     else:
         age = _age(last.get("last_sync"), now) if last.get("last_sync") else None
         if age is None or age > PARITY_MAX_AGE:
-            when = "never" if age is None else f"{age / 3600:.0f} hours ago"
-            out.append(_alert("parity:old", "warn", f"Parity was last synced {when}",
-                              "Changes since then can't be rebuilt if a disk fails.", "Sync now", "sync-parity", None))
+            if age is None:
+                title, detail = "Parity has never been synced", "Until it is, no disk can be rebuilt if it fails."
+            else:
+                title, detail = f"Parity was last synced {age / 3600:.0f} hours ago", "Changes since then can't be rebuilt if a disk fails."
+            out.append(_alert("parity:old", "warn", title, detail, "Sync now", "sync-parity", None))
     unprotected = (parity.get("diff") or {}).get("bytes") or 0
     if unprotected > UNPROTECTED_MAX:
         out.append(_alert("parity:unprotected", "warn", f"{_size(unprotected)} is not protected by parity yet",

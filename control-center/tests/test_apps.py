@@ -339,6 +339,9 @@ C = dict(service="web", state="running", exit_code=0, health=None, oom_killed=Fa
     ([{**C, "state": "restarting"}], "stopped", ("error", "web keeps restarting.")),
     ([{**C, "state": "exited", "exit_code": 137, "oom_killed": True}], "running", ("error", "web ran out of memory and stopped.")),
     ([{**C, "state": "exited", "exit_code": 1}], "running", ("error", "web exited unexpectedly (exit code 1).")),
+    # docker kill: the exit, not the stale health status Docker leaves behind
+    ([{**C, "state": "exited", "exit_code": 137, "health": "unhealthy"}], "running",
+     ("error", "web exited unexpectedly (exit code 137).")),
     ([{**C, "state": "exited", "exit_code": 0}], "running", ("stopped", "Stopped.")),
     ([{**C, "state": "exited", "exit_code": 137}], "stopped", ("stopped", "Stopped.")),
     ([C, {**C, "service": "db", "state": "dead", "exit_code": 2}], "running", ("error", "db exited unexpectedly (exit code 2).")),

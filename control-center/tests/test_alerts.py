@@ -91,7 +91,8 @@ def test_parity():
     old = alerts.evaluate(storage=parity(last={"last_sync": iso(50 * HOURS), "last_sync_ok": True}), now=NOW)
     assert ids(old) == ["parity:old"] and old[0]["title"] == "Parity was last synced 50 hours ago"
     assert old[0]["action"]["kind"] == "sync-parity"
-    assert alerts.evaluate(storage=parity(last={}), now=NOW)[0]["title"] == "Parity was last synced never"
+    never = alerts.evaluate(storage=parity(last={}), now=NOW)[0]
+    assert never["title"] == "Parity has never been synced" and "no disk can be rebuilt" in never["detail"]
     failed = alerts.evaluate(storage=parity(last={"last_sync": iso(HOURS), "last_sync_ok": False,
                                                   "last_sync_message": "Missing disk disk2"}), now=NOW)
     assert ids(failed) == ["parity:failed"] and failed[0]["detail"] == "Missing disk disk2"

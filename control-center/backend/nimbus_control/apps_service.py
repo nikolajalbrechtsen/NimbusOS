@@ -603,7 +603,10 @@ class AppsService:
         for c in containers:
             if c["state"] == "restarting":
                 return "error", f"{c['service']} keeps restarting."
-            if c["health"] == "unhealthy":
+            # Health only counts while the container runs: Docker leaves a
+            # killed container's last status, often "unhealthy", in place
+            # (found in the QEMU test, docs/PLAN.md NOTE-72).
+            if c["state"] == "running" and c["health"] == "unhealthy":
                 return "error", f"{c['service']} is unhealthy."
         running = [c for c in containers if c["state"] == "running"]
         if desired == "stopped":
