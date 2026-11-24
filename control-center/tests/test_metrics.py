@@ -182,8 +182,17 @@ class FakeApps:
 
 
 class FakeUpdates:
+    """UpdatesService as the collector sees it: status(), cached() and version."""
+
+    def __init__(self):
+        self.version, self._cached, self.calls = 0, None, 0
+
     async def status(self):
+        self.calls += 1
         return {"counts": {"security": 0}, "checked_at": "2026-11-23T08:00:00Z", "errors": []}
+
+    def cached(self):
+        return self._cached
 
 
 def collector(tmp_path, docker=None, libvirt=None, clock=None, wall=None):
@@ -423,3 +432,26 @@ def test_metrics_websocket(w):
 def test_json_safe(w):
     r = w.client.get("/api/dashboard", headers=w.h)
     json.loads(r.text)
+
+
+def test_update_alerts_follow_the_updates_page_at_once(tmp_path):
+    # Found in the QEMU test (NOTE-72): after "Check now" found a release, the
+    # dashboard kept saying "Updates have never been checked" for minutes.
+    async def main():
+        svc = collector(tmp_path)
+        await svc.tick()
+        first = svc.updates.calls
+        await svc.tick()
+        assert svc.updates.calls == first                    # nothing changed: no new privd call
+        svc.updates._cached = {"counts": {}, "update_available": True, "latest": {"version": "0.1.1-beta.1"},
+                               "checked_at": "2026-11-24T06:09:00Z", "errors": []}
+        svc.updates.version += 1                             # the Updates page checked
+        await svc.tick()
+        assert "NimbusOS 0.1.1-beta.1 is available" in [a["title"] for a in svc.alerts]
+        assert svc.updates.calls == first                    # its fresh status was used as it is
+        svc.updates._cached = None
+        svc.updates.version += 1                             # an install finished: the status was invalidated
+        await svc.tick()
+        assert svc.updates.calls == first + 1                # so it is read again
+        assert not [a for a in svc.alerts if a["id"] == "updates:release"]
+    asyncio.run(main())

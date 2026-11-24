@@ -202,6 +202,7 @@ class MetricsService:
         self._units_at = float("-inf")
         self.update_status = None
         self._updates_at = float("-inf")
+        self._updates_version = None
         self.storage = None             # {"disks", "fstab", "pool", "parity", "at"}
         self._housekeeping = None
 
@@ -418,12 +419,17 @@ class MetricsService:
         vms, vm_states = await self.vm_usage(host["threads"])
         if now - self._units_at >= UNITS_SECONDS:
             self.units, self._units_at = await self.failed_units(), now
-        if now - self._updates_at >= UPDATES_SECONDS:
+        # Every UPDATES_SECONDS, or at once when the Updates page changed the
+        # status (UpdatesService.version): its fresh status is used as it is.
+        changed = self.updates.version != self._updates_version
+        if changed or now - self._updates_at >= UPDATES_SECONDS:
             self._updates_at = now
             try:
-                self.update_status = await self.updates.status()
+                cached = self.updates.cached() if changed else None
+                self.update_status = cached if cached is not None else await self.updates.status()
             except PrivdError:
                 pass
+            self._updates_version = self.updates.version
         storage = self.storage_now()
         shares = split(host, apps, vms)
         self.alerts = alert_rules.evaluate(
