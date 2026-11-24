@@ -17,6 +17,8 @@
 #            on Plasma Chromium would otherwise ask KDE Wallet to create a
 #            wallet first; those dialogs held the page until the launch code
 #            had expired, docs/PLAN.md NOTE-72).
+#            Chromium's password manager is switched off in that profile, so
+#            it never offers to keep the passwords typed into the app.
 #       Problems are shown with kdialog, not just printed.
 # Why:  docs/PLAN.md NOTE-14 (the token is never on a command line, where
 #       every local user could read it in /proc) and NOTE-09.
@@ -105,6 +107,34 @@ def launch_code():
         sys.exit(1)
 
 
+# Chromium's password manager stays off in the app window's own profile: it
+# offered to save the SMB passwords typed into the NAS wizard, and with
+# --password-store=basic it would keep them under a fixed key (NOTE-72).
+PROFILE_PREFS = {"credentials_enable_service": False, "credentials_enable_autosignin": False}
+
+
+def seed_preferences(profile):
+    """Set PROFILE_PREFS in <profile>/Default/Preferences, keeping every other
+    setting. A file Chromium can't have written (not a JSON object) is left
+    alone rather than replaced."""
+    path = os.path.join(profile, "Default", "Preferences")
+    try:
+        with open(path, encoding="utf-8") as handle:
+            prefs = json.load(handle)
+    except FileNotFoundError:
+        prefs = {}
+    except (OSError, ValueError):
+        return
+    if not isinstance(prefs, dict) or all(prefs.get(k) == v for k, v in PROFILE_PREFS.items()):
+        return
+    prefs.update(PROFILE_PREFS)
+    os.makedirs(os.path.dirname(path), mode=0o700, exist_ok=True)
+    tmp = f"{path}.nimbus-tmp"
+    with open(tmp, "w", encoding="utf-8") as handle:
+        json.dump(prefs, handle)
+    os.replace(tmp, path)
+
+
 def main():
     if not session_has_access():
         offer_access()
@@ -113,6 +143,7 @@ def main():
     data_home = os.environ.get("XDG_DATA_HOME") or os.path.expanduser("~/.local/share")
     profile = os.path.join(data_home, "nimbus-control", "chromium")
     os.makedirs(profile, mode=0o700, exist_ok=True)
+    seed_preferences(profile)
     os.execv(CHROMIUM, [CHROMIUM, f"--app={BASE}/?launch={code}", "--class=NimbusControl",
                         f"--user-data-dir={profile}", "--password-store=basic", "--no-first-run",
                         "--no-default-browser-check", "--disable-features=Translate"])
