@@ -21,12 +21,16 @@
 #                     suite/component pairs;
 #                     a second run changes nothing; without the keyring it
 #                     fails clearly
-#         grub-debconf  without grub-pc does nothing; with it, records the
-#                     disk whose MBR holds GRUB as grub-pc/install_devices
-#                     (by-id name, never a partition; else the device path);
-#                     no GRUB there or no answer from grub-probe: records
-#                     nothing and still exits 0; runs right after Calamares'
-#                     bootloader step
+#         grub-debconf  without a GRUB package does nothing; with grub-pc,
+#                     records the disk whose MBR holds GRUB as
+#                     grub-pc/install_devices (by-id name, never a partition;
+#                     else the device path); no GRUB there or no answer from
+#                     grub-probe: records nothing and still exits 0; with
+#                     grub-efi-amd64, sets force_efi_extra_removable, runs
+#                     grub-install --force-extra-removable --no-nvram and
+#                     copies EFI/<id>/grub.cfg into EFI/BOOT, and a failure
+#                     doesn't stop the install; runs right after
+#                     Calamares' bootloader step, whose own EFI fallback is off
 #         live-session-setup  outside a live session does nothing; in one
 #                     puts an executable copy of "Install NimbusOS" on the
 #                     desktop, once
@@ -159,8 +163,8 @@ check "fails clearly without Debian's keyring" \
 echo "grub-debconf"
 GD="$INC/usr/lib/nimbusos-live/grub-debconf"
 devices() { echo "get grub-pc/install_devices" | debconf-communicate grub-pc 2>/dev/null | sed -n 's/^0 //p'; }
-check "without grub-pc (a UEFI install): records nothing, exits 0" \
-	sh -c '"$1" >"$2" 2>&1 && grep -q "nothing to record" "$2"' _ "$GD" "$WORK/gd-uefi.out"
+check "without a GRUB package: does nothing, exits 0" \
+	sh -c '"$1" >"$2" 2>&1 && grep -q "nothing to do" "$2"' _ "$GD" "$WORK/gd-none.out"
 apt-get install -y -q --no-install-recommends grub-pc >"$WORK/grub-pc.log" 2>&1 || { tail -n 30 "$WORK/grub-pc.log"; exit 1; }
 # Disks are image files here; a stand-in grub-probe names the one in
 # NIMBUS_TEST_DISK, and a by-id directory of our own links to them.
@@ -172,7 +176,10 @@ for d in grub unlinked; do dd if=/usr/lib/grub/i386-pc/boot.img of="$WORK/$d.img
 ln -s "$WORK/grub.img" "$WORK/by-id/ata-NIMBUS_TEST-part1"     # sorts first, and is a partition
 ln -s "$WORK/grub.img" "$WORK/by-id/virtio-NIMBUS-TEST"
 ln -s "$WORK/nogrub.img" "$WORK/by-id/virtio-NIMBUS-EMPTY"
-gd() { env PATH="$WORK/stub:$PATH" NIMBUS_BY_ID_DIR="$WORK/by-id" NIMBUS_TEST_DISK="$1" "$GD" >"$WORK/gd.out" 2>&1; }
+gd() {   # gd DISK [fail]: run grub-debconf with the stand-ins
+	env PATH="$WORK/stub:$PATH" NIMBUS_BY_ID_DIR="$WORK/by-id" NIMBUS_ESP="$WORK/esp" \
+		NIMBUS_TEST_DISK="$1" NIMBUS_TEST_FAIL="${2:-}" "$GD" >"$WORK/gd.out" 2>&1
+}
 reset_devices() { echo "grub-pc grub-pc/install_devices multiselect " | debconf-set-selections; }
 reset_devices
 gd "$WORK/grub.img" && rc=0 || rc=$?
@@ -188,12 +195,35 @@ reset_devices
 gd "" && rc=0 || rc=$?
 check "grub-probe fails: records nothing, says so, exits 0 (never stops the install)" \
 	sh -c '[ "$1" = 0 ] && [ -z "$2" ] && grep -q "grub-probe can.t name" "$3"' _ "$rc" "$(devices)" "$WORK/gd.out"
+# UEFI: grub-efi-amd64 replaces grub-pc (they conflict); a stand-in grub-install
+# records its arguments, or fails when NIMBUS_TEST_FAIL is set.
+apt-get install -y -q --no-install-recommends grub-efi-amd64 >"$WORK/grub-efi.log" 2>&1 || { tail -n 30 "$WORK/grub-efi.log"; exit 1; }
+printf '#!/bin/sh\necho "$*" >"%s"\n[ -z "${NIMBUS_TEST_FAIL:-}" ]\n' "$WORK/grub-install.args" >"$WORK/stub/grub-install"
+chmod +x "$WORK/stub/grub-install"
+removable() { echo "get grub2/force_efi_extra_removable" | debconf-communicate grub-efi-amd64 2>/dev/null | sed -n 's/^0 //p'; }
+echo "grub-efi-amd64 grub2/force_efi_extra_removable boolean false" | debconf-set-selections
+# The EFI system partition as grub-install leaves it: the small grub.cfg only
+# next to GRUB in EFI/<id>.
+mkdir -p "$WORK/esp/EFI/$NIMBUS_ID" "$WORK/esp/EFI/BOOT"
+printf "search.fs_uuid 0123 root\nset prefix=(\$root)'/boot/grub'\nconfigfile \$prefix/grub.cfg\n" >"$WORK/esp/EFI/$NIMBUS_ID/grub.cfg"
+gd "" && rc=0 || rc=$?
+check "UEFI: GRUB's updates keep the fallback path (force_efi_extra_removable true)" test "$rc:$(removable)" = "0:true"
+check "UEFI: runs grub-install as grub-efi-amd64 does, with --force-extra-removable and --no-nvram" \
+	test "$(cat "$WORK/grub-install.args")" = "--target=x86_64-efi --force-extra-removable --no-nvram"
+check "UEFI: EFI/BOOT gets the grub.cfg from EFI/${NIMBUS_ID} (GRUB reads the one next to it)" \
+	cmp -s "$WORK/esp/EFI/$NIMBUS_ID/grub.cfg" "$WORK/esp/EFI/BOOT/grub.cfg"
+rm -f "$WORK/esp/EFI/BOOT/grub.cfg"
+gd "" fail && rc=0 || rc=$?
+check "UEFI: a failing grub-install is reported, copies nothing, and the install goes on (exit 0)" \
+	sh -c '[ "$1" = 0 ] && grep -q "force-extra-removable failed" "$2" && [ ! -e "$3" ]' _ "$rc" "$WORK/gd.out" "$WORK/esp/EFI/BOOT/grub.cfg"
 check "Calamares runs it right after its bootloader step" python3 - "$INC/etc/calamares/settings.conf" <<'EOF'
 import sys, yaml
 s = yaml.safe_load(open(sys.argv[1]))
 execs = [m for block in s["sequence"] for kind, mods in block.items() if kind == "exec" for m in mods]
 sys.exit(0 if execs[execs.index("bootloader") + 1] == "shellprocess@nimbus-grub-debconf" else 1)
 EOF
+check "Calamares' own EFI fallback (GRUB alone in EFI/BOOT) is off" \
+	grep -qx 'installEFIFallback: false' "$INC/etc/calamares/modules/bootloader.conf"
 
 # --- the live files in place, as in the image -----------------------------------------------
 cp -a "$INC/." /

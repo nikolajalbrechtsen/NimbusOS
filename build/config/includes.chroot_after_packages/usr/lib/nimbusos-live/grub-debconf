@@ -1,57 +1,96 @@
 #!/bin/sh
 # =============================================================================
-# /usr/lib/nimbusos-live/grub-debconf: tell grub-pc where GRUB was installed
+# /usr/lib/nimbusos-live/grub-debconf: make GRUB's own upgrades work
 # =============================================================================
 # What: run by Calamares inside the installed system right after its
-#       bootloader step (shellprocess nimbus-grub-debconf). On a BIOS install
-#       (grub-pc installed) it finds the disk that holds /boot/grub and, if
-#       that disk's Master Boot Record now holds GRUB, records the disk as
-#       debconf's grub-pc/install_devices: by its /dev/disk/by-id name when
-#       it has one, as Debian's installer does. UEFI installs, and a boot
-#       loader put elsewhere or nowhere, are left alone. It never stops the
-#       install: without the record, grub-pc's next upgrade asks instead.
-#       NIMBUS_BY_ID_DIR names another by-id directory (tests).
-# Why:  docs/PLAN.md NOTE-72. Calamares runs grub-install itself and leaves
-#       the question empty. grub-pc's next upgrade can't ask it
-#       non-interactively, so it stops with "You must correct your GRUB
-#       install devices before proceeding" and leaves the package
-#       half-configured, which blocks every later update, unattended-upgrades
-#       included (seen in the QEMU test).
+#       bootloader step (shellprocess nimbus-grub-debconf). Calamares runs
+#       grub-install itself, so Debian's GRUB packages don't know what it did:
+#         - BIOS (grub-pc): finds the disk that holds /boot/grub and, if its
+#           Master Boot Record now holds GRUB, records it as debconf's
+#           grub-pc/install_devices, by its /dev/disk/by-id name when it has
+#           one, as Debian's installer does. A boot loader put elsewhere or
+#           nowhere is left alone;
+#         - UEFI (grub-efi-amd64): sets grub2/force_efi_extra_removable and
+#           runs grub-install as grub-efi-amd64's own scripts do, with
+#           --force-extra-removable and --no-nvram (Calamares made the boot
+#           entry), so the fallback path EFI/BOOT holds shim, GRUB and
+#           MokManager, now and after every GRUB update; then copies the
+#           grub.cfg that grub-install wrote next to GRUB in EFI/@NIMBUS_ID@
+#           into EFI/BOOT as well.
+#       It never stops the install; what it can't do, it says.
+#       NIMBUS_BY_ID_DIR and NIMBUS_ESP name another by-id directory and EFI
+#       system partition (tests).
+# Why:  docs/PLAN.md NOTE-72, both seen in the QEMU test:
+#         - with install_devices empty, grub-pc's next upgrade stops
+#           non-interactively ("You must correct your GRUB install devices
+#           before proceeding") and leaves the package half-configured,
+#           which blocks every later update, unattended-upgrades included;
+#         - Calamares' own fallback (installEFIFallback) copies GRUB alone to
+#           EFI/BOOT/BOOTX64.EFI. A firmware without NimbusOS's boot entry
+#           (NVRAM cleared, disk moved, or boards that start only that file)
+#           refused it under Secure Boot ("Access Denied": only shim carries
+#           Microsoft's signature) and stopped at a grub> prompt without.
+#           Debian's extra-removable files alone still stopped there.
 # =============================================================================
 set -eu
 
 me="nimbus-grub-debconf"
 BY_ID="${NIMBUS_BY_ID_DIR:-/dev/disk/by-id}"
+ESP="${NIMBUS_ESP:-/boot/efi}"
 
-# Any state with grub-pc's files on disk, "half-configured" included: that is
-# where a failed upgrade leaves it, and the record lets it be configured.
-case "$(dpkg-query -W -f='${Status}' grub-pc 2>/dev/null || true)" in
-	*" installed"|*" half-configured"|*" unpacked"|*" half-installed"|*" triggers-"*) ;;
-	*)
-		echo "$me: grub-pc isn't installed (a UEFI install); nothing to record"
-		exit 0
-		;;
-esac
-if ! disk="$(grub-probe --target=disk /boot/grub 2>/dev/null)" || [ -z "$disk" ]; then
-	echo "$me: grub-probe can't name the disk that holds /boot/grub; grub-pc will ask on its next upgrade" >&2
-	exit 0
-fi
-# GRUB's boot sector (boot.img) carries the string "GRUB".
-if ! head -c 512 "$disk" 2>/dev/null | grep -aq GRUB; then
-	echo "$me: the Master Boot Record of $disk doesn't hold GRUB (boot loader put elsewhere); nothing recorded" >&2
-	exit 0
-fi
+present() {   # present PACKAGE: its files are on disk; "half-configured" counts,
+	          # because a failed upgrade leaves it there and this lets it finish
+	case "$(dpkg-query -W -f='${Status}' "$1" 2>/dev/null || true)" in
+		*" installed"|*" half-configured"|*" unpacked"|*" half-installed"|*" triggers-"*) return 0 ;;
+		*) return 1 ;;
+	esac
+}
 
-target="$(readlink -f "$disk")"
-device="$disk"
-for link in "$BY_ID"/*; do
-	[ -L "$link" ] || continue
-	case "$link" in *-part[0-9]*) continue ;; esac
-	if [ "$(readlink -f "$link")" = "$target" ]; then
-		device="$link"
-		break
+bios() {
+	if ! disk="$(grub-probe --target=disk /boot/grub 2>/dev/null)" || [ -z "$disk" ]; then
+		echo "$me: grub-probe can't name the disk that holds /boot/grub; grub-pc will ask on its next upgrade" >&2
+		return 0
 	fi
-done
+	# GRUB's boot sector (boot.img) carries the string "GRUB".
+	if ! head -c 512 "$disk" 2>/dev/null | grep -aq GRUB; then
+		echo "$me: the Master Boot Record of $disk doesn't hold GRUB (boot loader put elsewhere); nothing recorded" >&2
+		return 0
+	fi
+	target="$(readlink -f "$disk")"
+	device="$disk"
+	for link in "$BY_ID"/*; do
+		[ -L "$link" ] || continue
+		case "$link" in *-part[0-9]*) continue ;; esac
+		if [ "$(readlink -f "$link")" = "$target" ]; then
+			device="$link"
+			break
+		fi
+	done
+	echo "grub-pc grub-pc/install_devices multiselect $device" | debconf-set-selections
+	echo "$me: grub-pc/install_devices is $device"
+}
 
-echo "grub-pc grub-pc/install_devices multiselect $device" | debconf-set-selections
-echo "$me: grub-pc/install_devices is $device"
+uefi() {
+	echo "grub-efi-amd64 grub2/force_efi_extra_removable boolean true" | debconf-set-selections
+	if ! grub-install --target=x86_64-efi --force-extra-removable --no-nvram; then
+		echo "$me: grub-install --force-extra-removable failed; the boot entry still works, the fallback path EFI/BOOT may not" >&2
+		return 0
+	fi
+	# Debian's signed GRUB reads the grub.cfg next to it (docs/PLAN.md A6), and
+	# grub-install writes that small file only into EFI/@NIMBUS_ID@; without a
+	# copy, GRUB started from EFI/BOOT stopped at its prompt. It names the root
+	# file system by UUID, so the copy stays right across GRUB updates.
+	if cp "$ESP/EFI/@NIMBUS_ID@/grub.cfg" "$ESP/EFI/BOOT/grub.cfg"; then
+		echo "$me: shim, GRUB, MokManager and grub.cfg are on the fallback path EFI/BOOT; GRUB updates keep them there"
+	else
+		echo "$me: couldn't copy grub.cfg to EFI/BOOT; GRUB started from there would stop at its prompt" >&2
+	fi
+}
+
+if present grub-pc; then
+	bios
+elif present grub-efi-amd64; then
+	uefi
+else
+	echo "$me: neither grub-pc nor grub-efi-amd64 is installed; nothing to do"
+fi
