@@ -1,6 +1,6 @@
 # NimbusOS — Build and Architecture Plan
 
-This is deliverable 1 of 11. It covers the repository layout, how the parts connect, the assumptions the work rests on, and every place where the implementation differs from the original specification. Each difference is numbered `NOTE-nn`, and code comments in later deliverables refer back to these numbers.
+This is deliverable 1 of 11 (deliverables 12 to 17, the headless appliance, are planned in §10). It covers the repository layout, how the parts connect, the assumptions the work rests on, and every place where the implementation differs from the original specification. Each difference is numbered `NOTE-nn`, and code comments in later deliverables refer back to these numbers.
 
 | | |
 |---|---|
@@ -1396,6 +1396,12 @@ Facts confirmed by reading live-build `1:20250505+deb13u1`'s own scripts and Deb
 | 9 | Catalog (done, NOTE-70) | `catalog/SCHEMA.md`, `catalog/manifest.schema.json` (with `template_version`, NOTE-60), the 10 apps; `webui.scheme`, `single_instance` and `companions` in `manifest.py`, `apps_service.py`, `docker_api.py`, `metrics_service.py` and the Catalog card; `timezone` and `share_gid` for templates; `check-catalog.py` refuses extra files; `test_catalog.py`, `tests/integration/catalog-images.sh`, catalog checks in `installed-smoke.sh` and `catalog.test.sh`, the real catalog in `ui_preview.py` |
 | 10 | CI/CD and docs (done, NOTE-71) | `.github/workflows/{ci,release,refresh}.yml`, `.github/dependabot.yml`, `tools/{publish-apt.sh,releases-json.py,split-iso.sh,pin-actions.sh,import-signing-key.sh,lint.sh}`, `tools/tests/{publish-apt,split-iso}.test.sh`, the tag rules in `build/lib/common.sh`, `control-center/tests/integration/samba-ucf-keeps-include.sh`, `README.md`, `LICENSE`, `LICENSES/CC-BY-SA-4.0.txt`, `.shellcheckrc`, `ruff.toml` (and the lint fixes it found), `docs/{RELEASING,SIGNING}.md`, `docs/release-notes/v0.1.0.md` |
 | 11 | Testing (done, NOTE-72; results in §7). The smoke test includes `systemctl --user show-environment \| grep XDG_CONFIG_DIRS` and kinfocenter's About page after a graphical login (NOTE-55), the Dashboard's Docker and VM numbers against `docker stats` and `virsh domstats`, and SnapRAID move lines on real disks (NOTE-69) | `docs/TESTING.md`, `tools/qemu-test.sh`, `tools/test-mirror.sh` with `tools/tests/test-mirror.test.sh` and `publish-apt.sh reindex`, `nimbus_exec` in `build/lib/common.sh`; the fixes the test found (NOTE-72): hook `0150-os-release`, `--keyring-packages` and `--include=ca-certificates` in `lb config`, `build.sh`'s host packages and work-directory check, `dev-shell.sh --work-volume`, GRUB font names and `gfxterm_font`, `util-linux-extra`, SDDM's input method, the About keys, the launcher's password settings, privd's mount namespace, VM disks by path, app health, parity wording, Docker timeouts, the update follow, the Dashboard's update status, the scheduled check's busy lock, and the installer step `nimbus-grub-debconf` (`usr/lib/nimbusos-live/grub-debconf`, its shellprocess config, `installEFIFallback: false`) |
+| 12 | The headless appliance: plan (done, §10) | `docs/PLAN.md` §10 |
+| 13 | Control Center over HTTPS with Linux sign-in (§10.3) | `nimbus-control-tls`, the PAM verb in privd, sessions, the login page, Quick open by host, the launcher retired, tests |
+| 14 | VM console through the Control Center (§10.3) | the WebSocket bridge, `nimbus-websockify` retired, tests |
+| 15 | The image without a desktop (§10.4, §10.5) | package lists, the metapackage, branding, the console banner, the default target, hooks and tests |
+| 16 | The installer ISO (§10.2) | the kiosk installer on tty1, boot menus, live-only packages and files, tests |
+| 17 | QEMU test of the appliance (§10.6) | `docs/TESTING.md`, `tools/qemu-test.sh`, `README.md`, §7 results |
 
 ---
 
@@ -1418,3 +1424,88 @@ Facts confirmed by reading live-build `1:20250505+deb13u1`'s own scripts and Deb
 10. **No hook 9990** (deliverable 6). live-build already regenerates the initramfs after all hooks, so `build.sh` checks that the ISO's initramfs carries the NimbusOS boot splash instead (NOTE-62).
 11. **Installer minimums** (deliverable 7): 32 GB of disk and 4 GB of memory in Calamares' welcome check. This is a policy choice; deliverable 11 checks it against the installed size (NOTE-63).
 12. **Control Center in five batches** (deliverable 8): the foundation plus Updates first, then Apps, VMs, Storage & Shares with Settings, and the Dashboard last because it shows all of them (NOTE-65).
+13. **A headless appliance, like Proxmox** (2026-11-24, after deliverable 11): the installed system has no desktop and boots to a console that shows the Control Center's address; the Control Center is reached over HTTPS on the LAN and signed into with a Linux account; the ISO boots straight into the installer. This replaces the desktop and the local-only security model (§4.3, NOTE-14). Plan in §10, deliverables 12 to 17.
+
+---
+
+## 10. The headless appliance (decided 2026-11-24)
+
+NimbusOS becomes a server appliance in the way Proxmox VE is one: install from the ISO, restart, and manage the machine from a browser on another computer. Three decisions (§9, item 13):
+
+1. **The Control Center is reached over HTTPS on the LAN** and signed into with a Linux account. It no longer listens on 127.0.0.1 only.
+2. **No desktop on the installed system.** Plasma, SDDM, Chromium, Firefox and Flatpak leave the image.
+3. **The ISO boots straight into the installer**: the existing, tested Calamares setup, full screen, with no live desktop.
+
+What stays as it is: Debian 13 and its security updates, the APT repository and releases, Docker and the app catalog, VMs, the NAS (mergerfs, SnapRAID, Samba), privd and its rules (no shell, every name, path and port validated), and every page of the Control Center.
+
+Checked in Trixie on 2026-11-24: `cage` 0.2.0, `qt6-wayland` 6.8.2, `calamares` 3.3.14 (built on Qt 6), `python3-pampy` 2.0.2, `python3-cryptography` 43.0.0, `util-linux` 2.41.5 (agetty's `\4` escape).
+
+### 10.1 What the user sees
+
+- **The ISO** boots to the NimbusOS menu (GRUB or ISOLINUX): "Install NimbusOS", "Install NimbusOS (safe graphics)", "Install NimbusOS (fail-safe mode)" and Utilities. The installer opens full screen: Welcome, Location, Keyboard, Partitions, Users, Summary, Install, Finish. The user created there is the administrator. The Finish page says that after the restart the screen shows the address to open.
+- **The installed system** boots through the NimbusOS GRUB menu and boot splash to a text console:
+
+  ```text
+  NimbusOS 0.2.0 (stable)
+
+    Manage this server from a web browser:
+      https://192.168.1.50:7777/
+
+    Certificate fingerprint (SHA-256):
+      3F:9A:…:C1
+
+    Sign in with the user you created during the installation.
+
+  nimbus login: _
+  ```
+
+  The address comes from agetty's `\4` escape, so it is current after a DHCP change. The fingerprint lets the user check the browser's warning about the self-signed certificate.
+- **In a browser** on another computer: `https://<address>:7777/`, the certificate warning once, the sign-in page, then the Dashboard.
+
+### 10.2 The installer ISO (deliverable 16)
+
+- **No live desktop.** A live-only unit on tty1 runs Calamares in `cage` (a single-application Wayland kiosk) as root, with `qt6-wayland`. When Calamares exits without installing, the unit offers it again. tty2 keeps a root shell for diagnosis, as installer media usually do.
+- **Live-only packages** (`calamares`, `cage`, `qt6-wayland`, the installer's fonts) move to a `*.list.chroot_live` list. live-build writes those to `filesystem.packages-remove`, and Debian's Calamares `packages` step removes them from the target, so none of it reaches an installed system. Deliverable 16 checks that mechanism against live-build and `calamares-settings-debian` first.
+- **Services that need not run in the installer** (Docker, containerd, libvirt, Samba, the Control Center) get a live-only `ConditionKernelCommandLine=!boot=live` drop-in, which `nimbus-target-cleanup` removes like every live-only file. The Docker tmpfs mounts (NOTE-21) are no longer needed.
+- **Kept:** the Calamares configuration and branding, `nimbus-grub-debconf`, `nimbus-sources-final`, `nimbus-target-cleanup`, the welcome checks, the boot menus' theme and fail-safe options (NOTE-64), hook `0150-os-release`.
+- **Retired:** the live autologin, `live-session-setup`, the "Install NimbusOS" desktop launcher, the live autostart entry, hook `0200-live-installer-launcher`.
+- **Users:** `users.conf` already puts the user in `sudo`, `nimbus-control`, `docker`, `libvirt` and `kvm`. Membership in `nimbus-control` is what lets an account sign into the Control Center.
+
+### 10.3 The Control Center on the network (deliverables 13 and 14)
+
+This replaces §4.3's local-only model, NOTE-14's launch codes and NOTE-16's local VM consoles. The Control Center can format disks and run containers and VMs, so it must not be reachable from the internet; README and the console say so.
+
+- **Listening:** `0.0.0.0:7777` and `[::]:7777`, HTTPS only (TLS 1.2 or newer). Plain HTTP on that port gets no page.
+- **Certificate:** `nimbus-control-tls.service` (oneshot, before `nimbus-control`) makes a self-signed ECDSA P-256 certificate on first start (`python3-cryptography`), with the host name, `<host>.local` and the addresses at that moment as subject alternative names. It is stored in `/etc/nimbus-control/tls/`, the key 0640 `root:nimbus-control`. It writes the fingerprint to `/run/issue.d/` for the console banner. An administrator can put their own certificate and key in place (documented); the service then leaves them alone.
+- **Signing in:** the sign-in page posts the user name and password once. The backend passes them to a new privd verb, `auth.login`, over privd's socket, never on a command line and never logged. privd runs PAM (`python3-pampy`) with its own service file, `/etc/pam.d/nimbus-control` (Debian's `common-auth` and `common-account`, so an administrator can add modules such as two-factor), and accepts only accounts in the `nimbus-control` group.
+- **Sessions:** a random 256-bit session identifier in a cookie named `__Host-nimbus_session` (Secure, HttpOnly, SameSite=Strict, Path=/). Sessions end after 60 minutes idle or 12 hours, and on sign-out. They are stored hashed in `/var/lib/nimbus-control/`, so the restarts an update causes don't sign anyone out (the update drawer keeps following, NOTE-72).
+- **Requests:** every API call and WebSocket needs a valid session. Every request that changes something, and every WebSocket, must carry an `Origin` equal to `https://<Host>`. Together with SameSite=Strict and TLS, that stops cross-site requests and DNS rebinding without a fixed host name. The CSP stays, with `connect-src 'self'` (`wss:` on the same origin).
+- **Brute force:** failed sign-ins are delayed more and more per address and per account (5 free, then up to 15 minutes), and each one is logged in a fixed format that fail2ban can read. Nothing about the password is logged.
+- **The VM console (deliverable 14):** the browser's VNC WebSocket goes to the Control Center itself (`/ws/vm/{uuid}/console`), which checks the session and bridges it to the VM's VNC on 127.0.0.1. One port, one sign-in. `nimbus-websockify.service` and port 6080 are retired.
+- **Quick open tiles** link to the host name the browser used (`window.location.hostname`), so `http://192.168.1.50:8096` works when the machine name doesn't resolve.
+- **Retired:** the token file, launch codes, `nimbus-control-open`, Grant access (`nimbus-grant-access`), the desktop entry and its polkit action, the Chromium profile settings, `test_launcher.py`.
+- **Settings** shows the certificate's fingerprint and the signed-in user, with "Sign out".
+
+### 10.4 The installed system (deliverable 15)
+
+- **Default target:** `multi-user.target`.
+- **Package lists:** `20-plasma`, `25-desktop-extras` and `30-theming-fonts` go, apart from what the Control Center serves (`fonts-inter`, `fonts-jetbrains-mono`) and what Plymouth and the console need. Chromium, Firefox, Flatpak and the Flathub setup go. NetworkManager stays (`nmcli` and `nmtui` on the console). The ISO is expected to drop well below 2 GiB, which would end the split download (NOTE-41); deliverable 17 measures it.
+- **The metapackage** `nimbusos-desktop` is renamed `nimbusos-server`. Nothing has been released, so the rename costs no upgrade path. `nimbus-update`'s "metapackage removed" warning and its alert follow the new name.
+- **Console:** `nimbusos-release` ships `/etc/issue` with the banner in §10.1 and an `/etc/motd` with the same address for SSH logins.
+- **Branding kept:** GRUB theme, ISOLINUX splash, Plymouth theme, Calamares branding, os-release, the logo. **Retired:** the Plasma look-and-feel, SDDM theme, wallpapers, colour schemes, `kdeglobals`, the About page (NOTE-55), and the desktop-base alternatives (NOTE-56). Without Plasma, `desktop-base` and its Debian user picture leave the image, which settles that open item in NOTE-72.
+
+### 10.5 Tests
+
+- **Unit and integration:** sign-in through a stand-in privd and through real PAM with a test user in a container, sessions and their expiry, the Origin rule, the brute-force delay, the certificate unit, the console bridge. `installed-smoke.sh` signs in over HTTPS instead of using a launch code.
+- **Image:** `verify-trixie.sh` and the image's APT check for the new lists; the hooks, live-files, bootloaders and branding tests for what moved or went.
+- **QEMU (deliverable 17):** `tools/qemu-test.sh` also forwards port 7777, so the smoke test runs from the host's browser at `https://localhost:7777`. The console banner is read over the serial port. BIOS and UEFI installs, and the whole checklist of §7.
+
+### 10.6 Order
+
+Deliverables 13 and 14 first: they work on today's image and can be tested at once. Then 15 and 16, which change the image. 17 checks everything together.
+
+### 10.7 Open questions
+
+1. **SSH.** Proxmox has SSH on by default. Recommended: install `openssh-server`, on, with Debian's defaults (no password login for root). Say no to leave the console and the Control Center as the only ways in.
+2. **Static addresses.** The installer has no network page. Until there is one, `nmtui` on the console sets a fixed address, or the router reserves one. Should the Control Center's Settings get a Network section (address, gateway, DNS, host name) as a later deliverable?
+3. **The port.** 7777 stays (Proxmox uses 8006). Say if you'd rather have 443 or another port.
